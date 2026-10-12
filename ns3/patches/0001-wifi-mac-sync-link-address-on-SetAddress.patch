@@ -1,0 +1,16 @@
+--- a/src/wifi/model/wifi-mac.cc	2026-10-06 11:17:23.411346612 -0400
++++ b/src/wifi/model/wifi-mac.cc	2026-10-06 11:17:23.428345526 -0400
+@@ -515,6 +515,13 @@
+ {
+     NS_LOG_FUNCTION(this << address);
+     m_address = address;
++    // Local patch: keep the single link's frame exchange manager in sync, so a
++    // later SetAddress() (e.g. by TapBridge UseLocal) does not leave the link
++    // address stale (see GetLinkIdByAddress).
++    if (m_links.size() == 1 && m_links.begin()->second->feManager)
++    {
++        m_links.begin()->second->feManager->SetAddress(address);
++    }
+ }
+ 
+ Mac48Address

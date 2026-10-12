@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>swarm_control</name>
+  <version>0.1.0</version>
+  <description>Leader-follower swarm logic; all inter-agent data goes through the emulated network.</description>
+  <maintainer email="dominickbraico32@gmail.com">Dominick</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>swarm_msgs</depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <depend>geometry_msgs</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

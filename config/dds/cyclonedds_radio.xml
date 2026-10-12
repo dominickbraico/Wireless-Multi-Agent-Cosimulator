@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Cyclone DDS bound to the emulated radio ONLY. Used by every agent for
+     inter-agent traffic. Discovery multicast therefore becomes 802.11 broadcast
+     (basic rate, no ACK/retry) as it would on real hardware. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="radio0" multicast="true" />
+      </Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+  </Domain>
+</CycloneDDS>

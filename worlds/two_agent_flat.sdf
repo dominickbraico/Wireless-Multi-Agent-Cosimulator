@@ -1,0 +1,58 @@
+<?xml version="1.0" ?>
+<!-- Flat world with two simple agents for network-only tests (network-only tests).
+     World name MUST equal the filename (PX4/gz convention). Frame: ENU meters.
+     Agents are non-static, gravity-free boxes moved by the set_pose service. -->
+<sdf version="1.9">
+  <world name="two_agent_flat">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <gravity>0 0 -9.8</gravity>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><plane><normal>0 0 1</normal><size>1000 1000</size></plane></geometry></collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>1000 1000</size></plane></geometry>
+          <material><ambient>0.6 0.6 0.6 1</ambient><diffuse>0.6 0.6 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="agent1">
+      <pose>0 0 1 0 0 0</pose>
+      <link name="body">
+        <gravity>false</gravity>
+        <inertial><mass>1.0</mass><inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz></inertia></inertial>
+        <visual name="visual">
+          <geometry><box><size>0.5 0.5 0.2</size></box></geometry>
+          <material><ambient>0.1 0.3 0.9 1</ambient><diffuse>0.1 0.3 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="agent2">
+      <pose>10 0 1 0 0 0</pose>
+      <link name="body">
+        <gravity>false</gravity>
+        <inertial><mass>1.0</mass><inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz></inertia></inertial>
+        <visual name="visual">
+          <geometry><box><size>0.5 0.5 0.2</size></box></geometry>
+          <material><ambient>0.9 0.3 0.1 1</ambient><diffuse>0.9 0.3 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

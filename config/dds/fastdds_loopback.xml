@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Fast DDS restricted to loopback. Used ONLY by the Micro XRCE-DDS Agent (which is Fast DDS, whatever
+     RMW the ROS nodes use). Keeps PX4's topics off radio0 and the management network: only the swarm
+     node's own participant may speak on radio0. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>loopback_udp</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList><address>127.0.0.1</address></interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="loopback_only" is_default_profile="true">
+    <rtps>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <userTransports><transport_id>loopback_udp</transport_id></userTransports>
+    </rtps>
+  </participant>
+</profiles>

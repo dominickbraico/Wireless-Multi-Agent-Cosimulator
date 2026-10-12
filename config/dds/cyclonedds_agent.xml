@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Cyclone DDS inside an agent. Two DDS domains with disjoint reach (see docs/ARCHITECTURE.md):
+       domain 0  = LOCAL (flight node <-> PX4 via the XRCE agent): NOT configured here. Processes set
+                   ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST (multicast off, discovery peer = localhost only).
+       domain 42 = RADIO (swarm node inter-agent traffic): bound to radio0 ONLY, below. This is the only DDS
+                   domain whose packets can leave the agent over the emulated link.
+     This file is loaded through CYCLONEDDS_URI only by processes that join domain 42. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="42">
+    <General>
+      <Interfaces><NetworkInterface name="radio0" multicast="true" /></Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+  </Domain>
+</CycloneDDS>

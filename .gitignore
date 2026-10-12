@@ -1,0 +1,12 @@
+logs/
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.pcap
+.fetched
+.vscode/
+
+# Local development notes (not part of the repository)
+dev_docs/
