@@ -5,8 +5,8 @@
 #   demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]
 #
 #   --config Y  experiment YAML (default: config/experiments/two_agent_wifi.yaml). Every agent flies (leader and followers as
-#               resolved by orchestrator/fleet.py). The overview camera and demo/monitor.py are laid out for the two-agent config:
-#               with more agents drag the camera in the GUI; the dashboard shows only agent1 and agent2.
+#               resolved by orchestrator/fleet.py). The overview camera frames every agent; demo/monitor.py is laid out for the two-agent config:
+#               the dashboard shows only agent1 and agent2.
 #   --world N   Gazebo world (worlds/N.sdf). Default: baylands (PX4's outdoor park-and-water world). px4_flat = plain ground.
 #   (default)   starts everything, opens the Gazebo GUI, sets an overview camera, waits for you to press Enter
 #               (start your screen recorder first), then flies. Needs sudo (real network namespaces).
@@ -102,20 +102,28 @@ if [ $GUI = 1 ]; then
     echo "Check:  ip addr show br-mgmt   (should show 10.20.0.1)   and that no other gz process uses partition 'cosim'."
   else
     echo "GUI connected."
-    # overview camera that frames both drones and the whole square (PX4 would otherwise follow the leader only)
-    read -r QX QY QZ QW < <(python3 - <<'PY'
-import math
-px, py, pz = -9.0, -11.0, 11.0          # camera position (E, N, Up)
-tx, ty, tz = 7.0, 8.0, 3.0              # look-at point (middle of the square, mid-altitude)
-dx, dy, dz = tx - px, ty - py, tz - pz
-yaw, pitch = math.atan2(dy, dx), math.atan2(-dz, math.hypot(dx, dy))
-cy, sy, cp, sp = math.cos(yaw / 2), math.sin(yaw / 2), math.cos(pitch / 2), math.sin(pitch / 2)
-print(-sy * sp, cy * sp, sy * cp, cy * cp)      # x y z w for rotation Rz(yaw) * Ry(pitch)
+    # top-down overview camera framing every agent in the YAML and the leader's square (PX4 would otherwise follow the leader only).
+    # The longer side of the formation runs along the screen's wide axis; height assumes a 60 deg horizontal and a 16:9 window.
+    read -r CX CY CZ QX QY QZ QW < <(python3 - "$CFG" "$SIDE" <<'PY'
+import math, sys, yaml
+cfg, side = yaml.safe_load(open(sys.argv[1])), float(sys.argv[2])
+xs = [a["spawn_pose"][0] for a in cfg["agents"]]
+ys = [a["spawn_pose"][1] for a in cfg["agents"]]
+x0, x1, y0, y1 = min(xs), max(xs) + side, min(ys), max(ys) + side     # the square extends `side` from the leader's spawn
+cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+ex, ey = x1 - x0, y1 - y0
+yaw = 0.0 if ey >= ex else math.pi / 2          # yaw 0: screen-horizontal is world y; yaw 90 deg: world x
+long_, short = (ey, ex) if ey >= ex else (ex, ey)
+h = 1.15 * max(long_ / 2 / math.tan(math.radians(30)), short / 2 / 0.325)
+h = max(h, 20.0)
+pitch = math.pi / 2                             # straight down
+cy_, sy_, cp, sp = math.cos(yaw / 2), math.sin(yaw / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+print(cx, cy, h, -sy_ * sp, cy_ * sp, sy_ * cp, cy_ * cp)      # position, then x y z w for rotation Rz(yaw) * Ry(pitch)
 PY
 )
     "${GZENV[@]}" /usr/bin/gz service -s /gui/follow --reqtype gz.msgs.StringMsg --reptype gz.msgs.Boolean --timeout 2000 --req 'data: ""' >/dev/null 2>&1
     "${GZENV[@]}" /usr/bin/gz service -s /gui/move_to/pose --reqtype gz.msgs.GUICamera --reptype gz.msgs.Boolean --timeout 2000 \
-        --req "pose: {position: {x: -9.0, y: -11.0, z: 11.0} orientation: {x: $QX, y: $QY, z: $QZ, w: $QW}}" >/dev/null 2>&1 \
+        --req "pose: {position: {x: $CX, y: $CY, z: $CZ} orientation: {x: $QX, y: $QY, z: $QZ, w: $QW}}" >/dev/null 2>&1 \
         && echo "overview camera set (drag in the GUI to adjust)" || echo "could not set the camera automatically; adjust it by hand"
   fi
 fi
