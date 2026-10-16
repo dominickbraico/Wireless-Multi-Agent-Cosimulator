@@ -44,17 +44,18 @@ network:
     bridge: br-mgmt
     subnet: 10.20.0.0/24
     bridge_ip: 10.20.0.1           # simulator side (Gazebo, pose bridge, ns-3) lives here
-# Baylands variant: spawn z = 1.2 m because the terrain at x=0, y=0..32 is up to ~0.7 m high and a vehicle spawned at 0.3 m starts inside it.
+# Baylands variant: the terrain at x=0 rises with y (measured surface z: ~0 at y=0..8, ~0.2 at 16, ~0.45 at 24, ~0.73 at 32), so spawn z follows it
+# (surface + ~0.35 m, the clearance used in the flat world). follower_offset is explicit so the z differences do not become formation offsets.
 # agent1 = leader; agent2..5 = followers spawned 8, 16, 24, 32 m from it (all inside the ~51 m default range).
 # initial_position is omitted: ns-3 starts each ghost at spawn_pose xyz + antenna_offset.
 # Same Wi-Fi/PHY as two_agent_wifi.yaml. For a gradual range edge (latency/loss rising with distance)
 # copy the two phy lines from two_agent_wifi_per_limited.yaml.
 agents:
-  - {name: agent1, radio_ip: 10.10.0.1, mgmt_ip: 10.20.0.11, px4_instance: 0, px4_gz_model: x500_0, spawn_pose: [0, 0, 1.2, 0], tap: tap-a1, bridge: br-a1, antenna_offset: [0, 0, 0.1]}
-  - {name: agent2, radio_ip: 10.10.0.2, mgmt_ip: 10.20.0.12, px4_instance: 1, px4_gz_model: x500_1, spawn_pose: [0, 8, 1.2, 0], tap: tap-a2, bridge: br-a2, antenna_offset: [0, 0, 0.1]}
-  - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [0, 16, 1.2, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1]}
-  - {name: agent4, radio_ip: 10.10.0.4, mgmt_ip: 10.20.0.14, px4_instance: 3, px4_gz_model: x500_3, spawn_pose: [0, 24, 1.2, 0], tap: tap-a4, bridge: br-a4, antenna_offset: [0, 0, 0.1]}
-  - {name: agent5, radio_ip: 10.10.0.5, mgmt_ip: 10.20.0.15, px4_instance: 4, px4_gz_model: x500_4, spawn_pose: [0, 32, 1.2, 0], tap: tap-a5, bridge: br-a5, antenna_offset: [0, 0, 0.1]}
+  - {name: agent1, radio_ip: 10.10.0.1, mgmt_ip: 10.20.0.11, px4_instance: 0, px4_gz_model: x500_0, spawn_pose: [0, 0, 0.3, 0], tap: tap-a1, bridge: br-a1, antenna_offset: [0, 0, 0.1]}
+  - {name: agent2, radio_ip: 10.10.0.2, mgmt_ip: 10.20.0.12, px4_instance: 1, px4_gz_model: x500_1, spawn_pose: [0, 8, 0.3, 0], follower_offset: [0, 8, 0], tap: tap-a2, bridge: br-a2, antenna_offset: [0, 0, 0.1]}
+  - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [0, 16, 0.6, 0], follower_offset: [0, 16, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1]}
+  - {name: agent4, radio_ip: 10.10.0.4, mgmt_ip: 10.20.0.14, px4_instance: 3, px4_gz_model: x500_3, spawn_pose: [0, 24, 0.9, 0], follower_offset: [0, 24, 0], tap: tap-a4, bridge: br-a4, antenna_offset: [0, 0, 0.1]}
+  - {name: agent5, radio_ip: 10.10.0.5, mgmt_ip: 10.20.0.15, px4_instance: 4, px4_gz_model: x500_4, spawn_pose: [0, 32, 1.1, 0], follower_offset: [0, 32, 0], tap: tap-a5, bridge: br-a5, antenna_offset: [0, 0, 0.1]}
 simulator:
   type: gazebo
   world: worlds/two_agent_flat.sdf
