@@ -8,6 +8,7 @@ network is not touched), or as root with `sudo <script>`.
 |---|---|
 | `tests/static_link.sh` | Ping and 2 Mbit/s UDP across ns-3 with negligible loss, lag within limit, 802.11 frames in the pcap, nothing flows with ns-3 stopped |
 | `tests/ros2_isolation.sh` | A ROS 2 talker and listener work through ns-3; zero messages and zero discovery with ns-3 stopped |
+| `tests/swarm_qos.sh` | LeaderState QoS parameters: matching profiles deliver, a best-effort publisher does not match a reliable subscriber, invalid values are rejected. Loopback only, no ns-3 |
 | `tests/swarm_leader_follower.sh` | Swarm node with a synthetic leader over the link: loss, latency, tracking, nothing without ns-3 |
 | `tests/pose_feed.sh` | Positions applied in ns-3 match Gazebo within one update period |
 | `tests/distance_sweep.sh` | About 3 minutes. Moves one agent from 1 to 200 m and back under traffic; plots RSSI, loss and latency against the link-budget prediction |

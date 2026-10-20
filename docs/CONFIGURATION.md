@@ -35,6 +35,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `network.mgmt` | Unemulated management network between the simulator and the robots |
 | `agents` | One entry per robot (below) |
 | `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
+| `swarm.qos.leader_state` | Optional: DDS QoS of the radio-side topic `/swarm/leader_state` (below). Default `best_effort`, `volatile`, depth 1 |
 | `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
@@ -90,6 +91,31 @@ Leader-follower runs use `orchestrator/fleet.py` (`orchestrator/fleet.py <yaml>`
 - All other agents are followers.
 - A follower's offset (follower minus leader, world frame) is its `follower_offset` if given, otherwise the difference of the
   two `spawn_pose` values, so each follower holds the formation it was spawned in. `OFFSET=x,y,z` forces one offset on every follower.
+
+### Swarm message QoS (`swarm.qos`)
+
+```yaml
+swarm:
+  qos:
+    leader_state:                 # /swarm/leader_state, the only topic that crosses the emulated channel
+      reliability: best_effort    # best_effort | reliable
+      durability: volatile        # volatile | transient_local
+      depth: 1                    # keep-last depth, integer >= 1
+```
+
+All keys are optional; the values shown are the defaults. The leader and every follower get the same profile (a best-effort
+publisher never matches a reliable subscriber, so differing profiles deliver nothing). Invalid values are rejected before the
+run starts. The profile in effect is printed in each `swarm_*.log` (`leader_state QoS: ...`).
+
+Choose by what the message means, not by default. `best_effort` suits periodic state where only the newest sample matters:
+loss stays visible (sequence gaps) and no retransmission load is added to the shared channel. `reliable` suits a message other
+agents plan around, because a lost one is otherwise invisible; on 802.11 it converts loss into latency, so check `latency_ms`
+in `swarm_follower_*.csv`. `transient_local` hands a late-joining agent the last sample. Samples larger than one 1500-byte frame
+are fragmented, and under `best_effort` losing one fragment loses the sample. Further topics (for example a committed
+trajectory) are added as further keys under `swarm.qos`; only `leader_state` exists today.
+
+Applies to `tests/leader_follower_fly.sh` and the container deployment (the demos use those). `tests/swarm_leader_follower.sh`
+and the sweep scripts start the node by hand and use its defaults.
 
 ## Adding robots
 

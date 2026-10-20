@@ -9,6 +9,8 @@ Offsets: a follower's formation offset (world ENU metres, follower - leader) is 
     fleet.py <experiment.yaml> [--offset x,y,z]    one line per agent, tab separated:
         role  name  px4_instance  spawn_x  spawn_y  off_x  off_y  off_z
     (--offset overrides every follower's offset; the leader's offset columns are 0.)
+
+    fleet.py <experiment.yaml> --qos-args      ros2 `-p` arguments that set the LeaderState QoS from `swarm.qos.leader_state`
 """
 import sys
 
@@ -39,8 +41,38 @@ def resolve(cfg, offset_override=None):
     return leader, followers
 
 
+QOS_KEYS = {"reliability": ("best_effort", "reliable"), "durability": ("volatile", "transient_local")}
+
+
+def leader_state_qos(cfg):
+    """-> {reliability, durability, depth} for /swarm/leader_state. YAML `swarm.qos.leader_state`; defaults match
+    the node's: best_effort, volatile, depth 1."""
+    q = {"reliability": "best_effort", "durability": "volatile", "depth": 1}
+    given = (((cfg.get("swarm") or {}).get("qos") or {}).get("leader_state")) or {}
+    unknown = set(given) - set(q)
+    if unknown:
+        raise ValueError(f"swarm.qos.leader_state: unknown keys {sorted(unknown)}")
+    q.update(given)
+    for k, ok in QOS_KEYS.items():
+        if q[k] not in ok:
+            raise ValueError(f"swarm.qos.leader_state.{k} must be one of {ok}, got {q[k]!r}")
+    if not isinstance(q["depth"], int) or q["depth"] < 1:
+        raise ValueError(f"swarm.qos.leader_state.depth must be an integer >= 1, got {q['depth']!r}")
+    return q
+
+
+def qos_args(cfg):
+    """The same, as ros2 command-line arguments (used by the container supervisor and the shell tests)."""
+    q = leader_state_qos(cfg)
+    return ["-p", f"qos_reliability:={q['reliability']}", "-p", f"qos_durability:={q['durability']}",
+            "-p", f"qos_depth:={q['depth']}"]
+
+
 def main():
     cfg = yaml.safe_load(open(sys.argv[1]))
+    if "--qos-args" in sys.argv:
+        print(" ".join(qos_args(cfg)))
+        return
     override = None
     if "--offset" in sys.argv:
         override = [float(v) for v in sys.argv[sys.argv.index("--offset") + 1].split(",")]

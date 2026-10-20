@@ -31,6 +31,7 @@ trap 'rc=$?; reap; exit $rc' EXIT
 trap 'exit 130' INT TERM HUP     # make Ctrl-C / kill run the EXIT trap (and so the reaper)
 # who leads / follows and the formation offsets (orchestrator/fleet.py): role name instance spawn_x spawn_y off_x off_y off_z
 FLEET=$(python3 "$ROOT/orchestrator/fleet.py" "$CFG" ${OFFSET:+--offset "$OFFSET"}) || exit 2
+QOS=$(python3 "$ROOT/orchestrator/fleet.py" "$CFG" --qos-args) || exit 2    # LeaderState QoS from swarm.qos.leader_state
 LEADER=""; LSPAWN=""; LINST=""; FOLLOWERS=()
 while IFS=$'\t' read -r role name inst sx sy ox oy oz; do
   if [ "$role" = leader ]; then LEADER=$name; LINST=$inst; LSPAWN="[$sx, $sy]"
@@ -80,7 +81,7 @@ swarm() { # agent role instance spawn_xy extra...
   local a=$1 role=$2 inst=$3 spawn=$4; shift 4
   inns $a env SWARM_MODE=px4 CYCLONEDDS_URI="file://$ROOT/config/dds/cyclonedds_agent.xml" \
       ros2 run swarm_control swarm_node --ros-args -p role:=$role -p agent_id:=$((inst+1)) -p px4_instance:=$inst \
-      -p spawn_xy:="$spawn" "$@" > "$OUT/swarm_$a.log" 2>&1 &
+      -p spawn_xy:="$spawn" $QOS "$@" > "$OUT/swarm_$a.log" 2>&1 &
 }
 for f in "${FOLLOWERS[@]}"; do
   read -r name inst spawn off <<< "$f"

@@ -23,7 +23,7 @@ from geometry_msgs.msg import PointStamped
 from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from swarm_msgs.msg import LeaderState
 
 
@@ -50,14 +50,19 @@ class SwarmNode(Node):
         self.declare_parameter('circle_period_s', 40.0)
         self.declare_parameter('link_timeout_s', 1.0)
         self.declare_parameter('log_csv', '')
+        # QoS of /swarm/leader_state, the topic that crosses the emulated channel. Set from the experiment YAML
+        # (`swarm.qos.leader_state`, see docs/CONFIGURATION.md). Both ends must use the same values: a best-effort
+        # publisher never matches a reliable subscriber.
+        self.declare_parameter('qos_reliability', 'best_effort')
+        self.declare_parameter('qos_durability', 'volatile')
+        self.declare_parameter('qos_depth', 1)
 
         self.role = self.get_parameter('role').value
         self.agent_id = int(self.get_parameter('agent_id').value)
         rate = float(self.get_parameter('rate_hz').value)
-        # Best-effort, depth-1 (sensor-style): stale state is useless, retransmitting
-        # it only adds load to a lossy shared medium.
+        qos = self.state_qos()
         if self.role == 'leader':
-            self.pub = self.create_publisher(LeaderState, '/swarm/leader_state', qos_profile_sensor_data)
+            self.pub = self.create_publisher(LeaderState, '/swarm/leader_state', qos)
             self.seq = 0
             self.t0 = self.get_clock().now()
             self.create_timer(1.0 / rate, self.publish_state)
@@ -65,7 +70,7 @@ class SwarmNode(Node):
             self.offset = list(self.get_parameter('offset').value)
             self.timeout = float(self.get_parameter('link_timeout_s').value)
             self.sub = self.create_subscription(
-                LeaderState, '/swarm/leader_state', self.on_state, qos_profile_sensor_data)
+                LeaderState, '/swarm/leader_state', self.on_state, qos)
             self.target_pub = None
             if self.target_cb is None:        # standalone: publish the target on this node's own domain
                 self.target_pub = self.create_publisher(PointStamped, '/swarm/follower_target', 10)
@@ -82,7 +87,20 @@ class SwarmNode(Node):
                 self.csv.writerow(['t_rx_s', 'seq', 'latency_ms', 'gap'])
         else:
             raise ValueError(f"role must be leader or follower, got {self.role}")
-        self.get_logger().info(f'swarm_node role={self.role} id={self.agent_id}')
+        self.get_logger().info(f'swarm_node role={self.role} id={self.agent_id} leader_state QoS: '
+                               f'{qos.reliability.name} {qos.durability.name} {qos.history.name} depth={qos.depth}')
+
+    def state_qos(self):
+        """QoS for /swarm/leader_state from the node parameters. Default: best-effort, volatile, keep-last-1, because
+        a stale leader position is worthless and retransmitting it would turn channel loss into latency and extra load
+        on the shared medium (the sequence numbers then report loss honestly)."""
+        rel = {'best_effort': ReliabilityPolicy.BEST_EFFORT, 'reliable': ReliabilityPolicy.RELIABLE}
+        dur = {'volatile': DurabilityPolicy.VOLATILE, 'transient_local': DurabilityPolicy.TRANSIENT_LOCAL}
+        r, d = self.get_parameter('qos_reliability').value, self.get_parameter('qos_durability').value
+        depth = int(self.get_parameter('qos_depth').value)
+        if r not in rel or d not in dur or depth < 1:
+            raise ValueError(f"qos: reliability in {list(rel)}, durability in {list(dur)}, depth >= 1; got {r}, {d}, {depth}")
+        return QoSProfile(reliability=rel[r], durability=dur[d], history=HistoryPolicy.KEEP_LAST, depth=depth)
 
     # --- leader ---
     def leader_position(self, t):
@@ -154,7 +172,6 @@ class LocalSide(Node):
     def __init__(self, context, role, instance, spawn_xy):
         super().__init__('swarm_local', context=context)
         from px4_msgs.msg import VehicleLocalPosition
-        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         self.spawn = spawn_xy
         self._lock = threading.Lock()
         self._state = None

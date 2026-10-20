@@ -71,7 +71,7 @@ def main():
     # swarm node: the only process on the radio domain
     senv = dict(os.environ, SWARM_MODE="px4", CYCLONEDDS_URI=f"file://{DDS}/cyclonedds_agent.xml")
     sargs = ["ros2", "run", "swarm_control", "swarm_node", "--ros-args", "-p", f"role:={'leader' if is_leader else 'follower'}",
-             "-p", f"agent_id:={inst + 1}", "-p", f"px4_instance:={inst}", "-p", f"spawn_xy:=[{sx},{sy}]"]
+             "-p", f"agent_id:={inst + 1}", "-p", f"px4_instance:={inst}", "-p", f"spawn_xy:=[{sx},{sy}]"] + fleet.qos_args(cfg)
     if is_leader:
         sargs += ["-p", "rate_hz:=10.0"]
     else:

@@ -105,8 +105,8 @@ PX4 instance *N* publishes under `/px4_N/fmu/...` (instance 0 has no prefix) and
 ## Swarm protocol
 
 The only inter-robot message is `swarm_msgs/LeaderState`: sender id, per-sender sequence number, send timestamp, position and
-velocity in a shared world frame (ENU, metres). It uses best-effort, keep-last-1 QoS, so loss is visible rather than hidden
-by retransmission. Sequence numbers and timestamps give loss and latency without extra instrumentation.
+velocity in a shared world frame (ENU, metres). By default it uses best-effort, volatile, keep-last-1 QoS, so loss is visible rather than hidden
+by retransmission; the profile is configurable (`swarm.qos.leader_state`, see CONFIGURATION.md). Sequence numbers and timestamps give loss and latency without extra instrumentation.
 
 - **Leader:** reads its PX4 state on the local domain, converts it to the world frame and publishes at a fixed rate.
 - **Follower:** computes `target = leader position + offset`, publishes it on the local domain (`/swarm/follower_target`) and
