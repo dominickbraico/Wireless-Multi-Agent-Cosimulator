@@ -8,7 +8,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/_config_flag.sh"          # sets CFG from --config <yaml> (default: two_agent_wifi.yaml)
-OUT="${OUT:-$(mktemp -d)}"
+OUT="${OUT:-$(mktemp -d)}"; mkdir -p "$OUT"
 cosim() { python3 "$ROOT/orchestrator/cosim.py" "$@"; }
 dc() { docker compose -f "$OUT/compose/docker-compose.yml" "$@"; }   # $ROOT may contain spaces
 trap 'cosim down --out "$OUT" >/dev/null 2>&1' EXIT

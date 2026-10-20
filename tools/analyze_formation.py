@@ -8,7 +8,7 @@ bridge); ns-3 node i is the i-th agent of the YAML.
 Formation error e(t) = |(p_follower - p_leader) - offset|, evaluated only while the leader is moving, per follower.
 The acceptance threshold (--max-p95, default 5 m) was fixed BEFORE the first run; the measured numbers are reported as-is.
 Also reports, per follower, swarm-link loss and latency against the mean distance to the leader.
-Writes formation.png, link_vs_distance.png (more than one follower) and formation_report.json. Exit 0 if every check passes.
+Writes formation.png, link_vs_distance.png (more than one follower), comm_map.png (tools/plot_comm_map.py) and formation_report.json. Exit 0 if every check passes.
 """
 import csv
 import json
@@ -219,4 +219,6 @@ try:
         fig.savefig(f"{log}/link_vs_distance.png", dpi=140, facecolor=SURF, bbox_inches="tight")
 except Exception as e:
     print("plot skipped:", repr(e))
+# map of every agent pair's signal strength (comm_map.png); a failure here never fails the run
+subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot_comm_map.py"), log, "--config", cfg_f])
 sys.exit(0 if ok_all else 1)

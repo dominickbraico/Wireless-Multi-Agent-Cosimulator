@@ -144,9 +144,15 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, label_links=
                    edgecolors="white", linewidths=1.2, zorder=5)
         ax.annotate(n + (" (leader)" if n == leader else ""), (x, y), textcoords="offset points", xytext=(9, 7),
                     fontsize=8.5, fontweight="bold", color="#202124", zorder=6)
-    pad = max(2.0, 0.12 * max(np.ptp(xy[:, 0]), np.ptp(xy[:, 1]), 1.0))
-    ax.set_xlim(xy[:, 0].min() - pad - (0.15 * np.ptp(xy[:, 1]) if use_arcs else 0), xy[:, 0].max() + pad + (0.15 * np.ptp(xy[:, 1]) if use_arcs else 0))
-    ax.set_ylim(xy[:, 1].min() - pad, xy[:, 1].max() + pad)
+    pts = [xy]
+    if tracks:                                           # keep the whole trace in view, not just the current positions
+        pts += [ps[ts <= t][:, :2] for ts, ps in (tracks[n] for n in names if n in tracks) if (ts <= t).any()]
+    allp = np.vstack(pts)
+    span = max(np.ptp(allp[:, 0]), np.ptp(allp[:, 1]), 1.0)
+    pad = max(2.0, 0.08 * span)
+    arc = 0.15 * np.ptp(xy[:, 1]) if use_arcs else 0.0   # collinear agents: the arcs bulge sideways
+    ax.set_xlim(allp[:, 0].min() - pad - arc, allp[:, 0].max() + pad + arc)
+    ax.set_ylim(allp[:, 1].min() - pad, allp[:, 1].max() + pad)
     ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel("x east (m)")
     ax.set_ylabel("y north (m)")
@@ -187,11 +193,13 @@ def main():
         snaps = [(None, static_positions(cfg))]
 
     n = len(snaps)
-    fig, axes = plt.subplots(1, n, figsize=(6.4 * n + 1.4, 6.0), squeeze=False)
+    fig, axes = plt.subplots(1, n, figsize=(6.4 * n + 1.4, 6.6), squeeze=False)
     for ax, (t, pos) in zip(axes[0], snaps):
         draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, a.curved)
     sm = plt.cm.ScalarMappable(norm=norm, cmap=CMAP)
-    cb = fig.colorbar(sm, ax=list(axes[0]), fraction=0.04 if n == 1 else 0.025, pad=0.02)
+    fig.subplots_adjust(left=0.07 / n ** 0.5, right=0.87, bottom=0.14, top=0.88, wspace=0.28)
+    cax = fig.add_axes([0.895, 0.14, 0.014, 0.74])
+    cb = fig.colorbar(sm, cax=cax)
     cb.set_label("received signal strength (dBm)")
     cb.ax.axhline(floor, color="#202124", lw=1.0) if lo < floor < hi else None
     fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"),
@@ -200,7 +208,6 @@ def main():
                loc="lower center", ncol=3, frameon=False, fontsize=8.5)
     fig.suptitle(f"Inter-agent signal strength: {cfg['experiment']['name']}   ({len(names)} agents, {len(names) * (len(names) - 1) // 2} links; "
                  f"numbers are dBm)", fontsize=11)
-    fig.subplots_adjust(bottom=0.13, top=0.88)
     out = a.out or os.path.join(a.log_dir or ".", "comm_map.png")
     fig.savefig(out, dpi=150)
     print(f"plot_comm_map: wrote {out}")
