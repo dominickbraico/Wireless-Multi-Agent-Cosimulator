@@ -17,6 +17,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `two_agent_wifi_snr_floor.yaml` | Same, with the RSSI floor lowered so an SNR floor sets the range (about 95 m) |
 | `two_agent_wifi_per_limited.yaml` | Both floors lowered so the packet error rate sets the range (gradual, about 100 to 110 m) |
 | `five_agent_wifi.yaml` | Five agents, one leader and four followers spaced 8 m apart |
+| `two_agent_wifi_80211g.yaml`, `two_agent_wifi_80211n.yaml` | `two_agent_wifi.yaml` with the radio technology changed to 802.11g (2.4 GHz) and 802.11n (5 GHz) |
 
 ## Sections
 
@@ -24,13 +25,15 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 |---|---|
 | `experiment` | `name`, `duration_s`, `log_dir` |
 | `time` | `ns3_sync_mode`, `ns3_hard_limit_s`, `max_lag_ms` (run flagged invalid above this), `min_rtf`, `rtf_window_s` |
-| `network.wifi` | `standard`, `mac`, `rate_manager`, `data_mode`, `control_mode`, `tx_power_dbm`, `error_rate_model` (`TableBased` or `Nist`), `retry_limit`, `phy.*` receiver parameters |
+| `network.technology` | Radio technology = which ns-3 scenario runs (default and only built-in: `wifi`). See [CONTAINERS.md](CONTAINERS.md), "Changing the networking technology" |
+| `network.wifi` | `standard` (`80211a`, `80211g`, `80211n`, `80211ac`, `80211ax`), `band`, `mac`, `rate_manager`, `data_mode`, `control_mode`, `tx_power_dbm`, `error_rate_model` (`TableBased` or `Nist`), `retry_limit`, `phy.*` receiver parameters |
 | `network.channel` | `loss` (propagation loss models), `delay` |
 | `network.pose` | Pose feed: `transport`, `listen_addr`, `port`, `rate_hz`. Omit the section to run with static positions |
 | `network.radio_subnet` | Subnet of the emulated radio, e.g. `10.10.0.0/24` |
 | `network.radio_firewall` | `enabled`, `allow_udp_ports` (the RTPS ports of the swarm DDS domain) |
 | `network.mgmt` | Unemulated management network between the simulator and the robots |
 | `agents` | One entry per robot (below) |
+| `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
 | `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
@@ -55,6 +58,19 @@ threshold, sensitivity) determine which mechanism limits the range; each corresp
 | `tap`, `bridge` | Names of the TAP device and Linux bridge (interface names are limited to 15 characters) |
 | `role` | Optional: `leader` or `follower` |
 | `follower_offset` | Optional: `[x, y, z]` formation offset from the leader (world frame) |
+
+### Docker deployment (`containers`)
+
+The container deployment ([CONTAINERS.md](CONTAINERS.md)) derives everything from the sections above. Two optional keys exist, both for avoiding address clashes:
+
+```yaml
+containers:
+  ns3_mgmt_ip: 10.20.0.2           # the ns3 container on the management network (default: first address not used by the simulator or an agent)
+  link_subnet_base: 10.30.0.0/16   # agent i gets the i-th /24 of this block as its private link network to ns-3
+```
+
+In a container run, `network.mgmt.bridge_ip` is the simulator container's address, `network.pose.listen_addr` is replaced by the ns3
+container's address in the copy of the YAML the containers read (`<log dir>/compose/experiment_run.yaml`), and `bridge` and `tap` still name the bridge and TAP inside the ns3 container.
 
 ### ns-3 start position
 

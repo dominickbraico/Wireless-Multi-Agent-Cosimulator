@@ -14,5 +14,6 @@ px4/fetch_gazebo_models.sh
 tools/setup_px4_runtime.sh                    # extracts the runtime into ~/dev/px4-runtime
 ```
 
-The image is only a build environment. `tools/setup_px4_runtime.sh` copies PX4, the XRCE agent and `px4_msgs` out of it so PX4 runs natively
+The Docker deployment ([../docs/CONTAINERS.md](../docs/CONTAINERS.md)) builds its agent and simulator images on top of this image (`docker/agent.Dockerfile`,
+`docker/sim-gazebo.Dockerfile`), so build it first. For the native setup the image is only a build environment. `tools/setup_px4_runtime.sh` copies PX4, the XRCE agent and `px4_msgs` out of it so PX4 runs natively
 inside the per-agent network namespaces. The pinned versions are the `ARG` lines at the top of the Dockerfile.

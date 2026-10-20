@@ -4,8 +4,8 @@
 
 *Conceptual architecture. The physics simulator provides each agent's PX4 SITL with sensor data and receives motor commands, and publishes
 ground-truth poses that drive each agent's mobility model in the network simulator. ROS 2 traffic between agents is carried by the network
-simulator's wireless model through a TapBridge. In the current implementation the "containers" are host processes and per-agent Linux network
-namespaces (the Docker backend is not implemented), and the ROS 2 control layer is split as described below.*
+simulator's wireless model through a TapBridge. Two deployments implement it: the native one, where the "containers" are host processes in per-agent Linux network
+namespaces, and the Docker one, where they are real containers ([CONTAINERS.md](CONTAINERS.md)). The ROS 2 control layer is split as described below.*
 
 ## Overview
 
@@ -17,6 +17,20 @@ The cosimulator couples three independent parts:
 
 Packets from real ROS 2 processes cross a simulated Wi-Fi channel; the simulator only supplies positions. Robots have
 no network path to each other other than through ns-3. This is checked by the isolation tests (see [EXPERIMENTS.md](EXPERIMENTS.md)).
+
+## Deployments
+
+The same experiment YAML, ns-3 scenario, agent software and tests run two ways:
+
+| | Native | Docker Compose |
+|---|---|---|
+| Agent isolation | Linux network namespace per agent (`orchestrator/wire.py`) | One container per agent, private link network to ns-3 (`orchestrator/container_net.py`) |
+| ns-3 | Host process | `ns3` container |
+| Physics simulator | Host process | `simulator` container |
+| Needs on the host | ROS 2, Gazebo, PX4 runtime, ns-3 build, root or user namespaces | Docker only |
+| Run with | `tests/leader_follower_fly.sh` | `tests/containers_leader_follower.sh` |
+
+The wireless emulation path, DDS domains, swarm protocol and run-validity checks below are identical in both.
 
 ## Components
 
@@ -114,5 +128,5 @@ Because the emulation is real-time, a run is only meaningful if the simulators k
 - The follower's link-loss behaviour is configurable (`hold` or `land`); no policy is recommended yet.
 - One leader per experiment; followers only receive.
 - Quadrotor (PX4 x500) in Gazebo only. A second simulator adapter requires a pose bridge and a vehicle driver.
-- The Docker backend of `wire.py` is not implemented; robots run in plain network namespaces.
+- The native deployment runs robots in plain network namespaces; the container deployment is described in [CONTAINERS.md](CONTAINERS.md) (headless, Gazebo only).
 - Ground is assumed at z = 0 in the swarm node's altitude conversion.

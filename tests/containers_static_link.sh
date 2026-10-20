@@ -12,6 +12,7 @@ OUT="${OUT:-$(mktemp -d)}"; mkdir -p "$OUT"
 cosim() { python3 "$ROOT/orchestrator/cosim.py" "$@"; }
 dc() { docker compose -f "$OUT/compose/docker-compose.yml" "$@"; }   # $ROOT may contain spaces
 trap 'cosim down --out "$OUT" >/dev/null 2>&1' EXIT
+trap 'exit 130' INT TERM HUP
 fail=0
 chk() { if [ "$2" = ok ]; then echo "PASS  $1"; else echo "FAIL  $1  ($2)"; fail=1; fi; }
 plan() { python3 "$ROOT/orchestrator/containers.py" "$CFG" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
