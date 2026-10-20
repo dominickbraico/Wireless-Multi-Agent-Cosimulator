@@ -8,7 +8,7 @@ far veth end moved into the agent's network namespace as `radio0`.
 
 Backends decide how the agent's namespace is found:
   netns   (default) plain `ip netns` namespaces named ns-<agent>   [local dev]
-  docker  (planned) namespace of the running container <prefix><agent>
+  (Docker deployments do not use this script: see container_net.py, which reuses the helpers below.)
 
 Needs CAP_NET_ADMIN (root, or `unshare -Urnm` for rootless testing).
 Idempotent: `up` tears down first.
@@ -98,15 +98,14 @@ def mgmt_up(cfg, be):
     print(f"wire: mgmt {br} {m['bridge_ip']}/{prefix}, agents isolated from each other")
 
 
-def radio_firewall_up(cfg, be):
-    """Default-deny on radio0 inside every agent namespace: only the swarm DDS domain's UDP ports may enter or
-    leave. Independent of any DDS vendor's behaviour (the XRCE agent, Fast DDS, ignored its loopback-only profile
-    and advertised PX4 topics on radio0). Counters on the drop rules report what was blocked."""
+def radio_firewall_ruleset(cfg):
+    """nftables ruleset text for the default-deny policy on radio0, or None when the config has no enabled firewall.
+    Shared by the namespace backend (here) and the per-agent containers (container_net.py)."""
     fw = cfg["network"].get("radio_firewall") or {}
     if not fw.get("enabled"):
-        return
+        return None
     lo, hi = fw["allow_udp_ports"]
-    rules = f"""table inet cosim_radio {{
+    return f"""table inet cosim_radio {{
   chain out {{
     type filter hook output priority 0; policy accept;
     oifname "radio0" udp dport {lo}-{hi} accept
@@ -123,6 +122,16 @@ def radio_firewall_up(cfg, be):
   counter blocked_in {{ }}
 }}
 """
+
+
+def radio_firewall_up(cfg, be):
+    """Default-deny on radio0 inside every agent namespace: only the swarm DDS domain's UDP ports may enter or
+    leave. Independent of any DDS vendor's behaviour (the XRCE agent, Fast DDS, ignored its loopback-only profile
+    and advertised PX4 topics on radio0). Counters on the drop rules report what was blocked."""
+    rules = radio_firewall_ruleset(cfg)
+    if rules is None:
+        return
+    lo, hi = cfg["network"]["radio_firewall"]["allow_udp_ports"]
     for a in cfg["agents"]:
         r = subprocess.run(be.exec(a, "nft -f -").split(), input=rules, text=True, capture_output=True)
         if r.returncode != 0:
