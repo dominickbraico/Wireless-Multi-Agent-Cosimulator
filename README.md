@@ -41,6 +41,7 @@ The same flight in Docker Compose, with nothing but Docker on the host ([docs/CO
 ```
 python3 orchestrator/cosim.py build
 tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.yaml
+demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a live signal-strength map
 ```
 
 ## Documentation

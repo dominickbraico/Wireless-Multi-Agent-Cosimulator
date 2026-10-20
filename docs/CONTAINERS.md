@@ -12,6 +12,25 @@ tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.
 Tested with Docker 29.7 and Compose 5.5 on Ubuntu 24.04. The native deployment (network namespaces on the host, see
 [SETUP.md](SETUP.md)) still works and is unchanged; both read the same experiment YAML.
 
+## Live demo: Gazebo GUI and live signal map
+
+```
+demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-prompt]      # default config: five_agent_wifi.yaml
+```
+
+The simulation runs in the containers; two windows open on the host: the **Gazebo GUI**, attached to the simulator container, and a **live 2D map**
+(`tools/plot_comm_map.py --live`) that redraws about twice a second from the poses ns-3 is applying, with every agent pair coloured dark green (strong) to red (weak).
+The script starts the stack and holds the vehicles on the ground, opens the windows and frames an overview camera, and flies when you press Enter
+(`--no-prompt`: after 5 s). No sudo. It needs a desktop session, matplotlib with Tk (`python3-tk`), and Gazebo Harmonic and PX4's models on the host for the GUI
+(see [SETUP.md](SETUP.md)); `--no-gui` and `--no-map` drop either window.
+
+How the GUI reaches the container: the host's `gz` joins the `cosim` Gazebo partition from the Docker bridge's gateway address on `mgmt` (`10.20.0.254` by default,
+`mgmt.gateway` in `containers.py`). The agents' management firewall ignores it (only the simulator is allowed), and the GUI is not part of the experiment.
+
+Known effect: attaching the GUI makes the simulator pause briefly while it sends the scene. That happens before take-off, but a pause of about 0.3 s is enough to pull
+the strict 5-second real-time-factor window under 0.95, so the RTF line of the end-of-run report can read FAIL in a GUI run. The other checks cover the flight. The demo
+prints a note when that happens; the headless `tests/containers_leader_follower.sh` is the strict validity run.
+
 ## Containers
 
 | Container | Image | Runs | Count |
@@ -194,7 +213,7 @@ Wi-Fi devices.
 
 ## Limitations
 
-- The Gazebo GUI is not part of the stack (the containers are headless). The native `demo/run_gui_demo.sh` still provides it.
+- The Gazebo GUI is not inside the stack (the containers are headless); `demo/run_container_demo.sh` attaches the host's GUI to it (see above).
 - The `baylands` world is not supported in containers: its terrain is downloaded from Gazebo Fuel at first use and the networks are internal (no internet).
   `px4_flat` is the default.
 - PX4's Gazebo models are fetched from the `PX4-gazebo-models` repository's main branch when the simulator image is built; they are not pinned.

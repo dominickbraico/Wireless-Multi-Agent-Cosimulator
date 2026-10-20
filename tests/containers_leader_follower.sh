@@ -2,7 +2,7 @@
 # Leader-follower flight in Docker Compose: a simulator container, an ns-3 container and one container per agent
 # (PX4 SITL + ROS 2). The container counterpart of tests/leader_follower_fly.sh; same flight, same analysis, same pass criteria.
 #   tests/containers_leader_follower.sh [--config YAML]      (images first: orchestrator/cosim.py build)
-# Env: PX4_WORLD (worlds/<name>.sdf, default from the YAML), OUT (log directory), SIDE (m), ALT (m), SPEED (m/s),
+# Env: WAIT_FOR_GUI=1 (hold the flight until $OUT/go exists), PX4_WORLD (worlds/<name>.sdf, default from the YAML), OUT (log directory), SIDE (m), ALT (m), SPEED (m/s),
 #      OFFSET (x,y,z: force this offset on every follower)
 # Needs only the Docker daemon (no sudo, no host network changes). The Gazebo GUI is not part of the stack.
 set -u
@@ -22,6 +22,11 @@ cosim up --config "$CFG" --out "$OUT" --mode flight ${PX4_WORLD:+--world "$PX4_W
   || { tail -40 "$OUT/up.log"; echo "FAIL  stack not healthy (see $OUT/up.log)"; exit 1; }
 echo "stack up: simulator, ns3 and $N agent containers healthy"
 sleep 8                                   # EKF settle + first poses reach ns-3
+# Optional: hold the flight until a Gazebo GUI is attached (demo/run_container_demo.sh):  WAIT_FOR_GUI=1  ->  touch "$OUT/go"
+if [ "${WAIT_FOR_GUI:-0}" = 1 ]; then
+  echo "=== All vehicles are up and waiting on the ground. Start the flight with:   touch \"$OUT/go\"      (auto-starts after 300 s)"
+  for i in $(seq 1 300); do [ -e "$OUT/go" ] && break; sleep 1; done
+fi
 touch "$OUT/go"                           # every agent supervisor waits for this file
 
 for i in $(seq 1 600); do
