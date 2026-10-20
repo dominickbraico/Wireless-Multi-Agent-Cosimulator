@@ -3,6 +3,7 @@
 // Real packets enter/leave through TAP devices created by the orchestrator.
 //
 //   wifi_adhoc_tap --config=<experiment.yaml> [--log-dir=<dir>] [--duration=<s>]
+// network.wifi.standard: 80211a (default), 80211g, 80211n, 80211ac or 80211ax; optional network.wifi.band: 5GHZ | 2_4GHZ.
 
 #include "ns3/core-module.h"
 #include "ns3/mobility-module.h"
@@ -60,6 +61,8 @@ struct Cfg
     double maxLagMs;
     std::string dataMode;
     std::string ctrlMode;
+    std::string standard = "80211a";
+    std::string band = "5GHZ"; // 5GHZ | 2_4GHZ
     double txPowerDbm;
     int retryLimit; // <0 = ns-3 default
     double rxNoiseFigureDb = 7.0;
@@ -91,6 +94,20 @@ Timestamp()
     return buf;
 }
 
+// network.wifi.standard -> ns-3 standard. The rate strings (data_mode, control_mode) are passed through to ns-3 as
+// given, so they must belong to the chosen standard (OfdmRate12Mbps, ErpOfdmRate12Mbps, HtMcs4, VhtMcs4, HeMcs4, ...).
+WifiStandard
+StandardOf(const std::string& name)
+{
+    static const std::map<std::string, WifiStandard> known{{"80211a", WIFI_STANDARD_80211a},
+                                                           {"80211g", WIFI_STANDARD_80211g},
+                                                           {"80211n", WIFI_STANDARD_80211n},
+                                                           {"80211ac", WIFI_STANDARD_80211ac},
+                                                           {"80211ax", WIFI_STANDARD_80211ax}};
+    auto it = known.find(name);
+    return it == known.end() ? WIFI_STANDARD_UNSPECIFIED : it->second;
+}
+
 Cfg
 LoadConfig(const std::string& path)
 {
@@ -106,7 +123,12 @@ LoadConfig(const std::string& path)
     c.maxLagMs = y["time"]["max_lag_ms"].as<double>();
 
     auto w = y["network"]["wifi"];
-    NS_ABORT_MSG_IF(w["standard"].as<std::string>() != "80211a", "only 80211a supported so far");
+    c.standard = w["standard"].as<std::string>();
+    NS_ABORT_MSG_IF(StandardOf(c.standard) == WIFI_STANDARD_UNSPECIFIED,
+                    "unsupported network.wifi.standard '" << c.standard
+                                                          << "' (supported: 80211a, 80211g, 80211n, 80211ac, 80211ax)");
+    c.band = w["band"].as<std::string>(c.standard == "80211g" ? "2_4GHZ" : "5GHZ");
+    NS_ABORT_MSG_IF(c.band != "5GHZ" && c.band != "2_4GHZ", "network.wifi.band must be 5GHZ or 2_4GHZ");
     NS_ABORT_MSG_IF(w["mac"].as<std::string>() != "adhoc", "only adhoc MAC supported");
     NS_ABORT_MSG_IF(w["rate_manager"].as<std::string>() != "ConstantRate",
                     "only ConstantRate supported so far");
@@ -423,9 +445,14 @@ main(int argc, char* argv[])
     phy.Set("CcaEdThreshold", DoubleValue(cfg.ccaEdDbm));
     phy.Set("RxSensitivity", DoubleValue(cfg.rxSensDbm));
     phy.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
+    // channel number 0 and width 0 select the standard's default channel in the chosen band
+    if (cfg.standard != "80211a")
+    {
+        phy.Set("ChannelSettings", StringValue("{0, 0, BAND_" + cfg.band + ", 0}"));
+    }
 
     WifiHelper wifi;
-    wifi.SetStandard(WIFI_STANDARD_80211a);
+    wifi.SetStandard(StandardOf(cfg.standard));
     wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
                                  "DataMode",
                                  StringValue(cfg.dataMode),
@@ -529,6 +556,9 @@ main(int argc, char* argv[])
         << "  \"experiment\": \"" << cfg.name << "\",\n"
         << "  \"duration_s\": " << cfg.durationS << ",\n"
         << "  \"agents\": " << n << ",\n"
+        << "  \"wifi_standard\": \"" << cfg.standard << "\",\n"
+        << "  \"wifi_band\": \"" << cfg.band << "\",\n"
+        << "  \"wifi_data_mode\": \"" << cfg.dataMode << "\",\n"
         << "  \"ns3_max_lag_ms\": " << g_maxLagMs << ",\n"
         << "  \"ns3_mean_lag_ms\": " << (g_lagSamples ? g_sumLagMs / g_lagSamples : 0) << ",\n"
         << "  \"max_lag_limit_ms\": " << cfg.maxLagMs << ",\n"

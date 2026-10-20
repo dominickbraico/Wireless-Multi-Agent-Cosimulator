@@ -11,7 +11,8 @@ time:
   min_rtf: 0.95
   rtf_window_s: 5.0                # sliding-mean window for the RTF validity check
 network:
-  backend: ns3                     # interface kept open for a 'netem' stress backend
+  backend: ns3                     # network emulator engine (only ns3 exists; a 'netem' stress backend would be another)
+  technology: wifi                 # radio technology = which ns-3 scenario runs; see docs/CONTAINERS.md 'Changing the networking technology'
   wifi:
     standard: 80211a
     mac: adhoc

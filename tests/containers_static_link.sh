@@ -63,4 +63,7 @@ frames=$(dc exec -T ns3 sh -c 'tcpdump -r /logs/ns3/wifi-0-0.pcap -nn 2>/dev/nul
 dc stop ns3 >/dev/null 2>&1
 dc exec -T agent1 ping -c 3 -W 1 "$R2" >/dev/null 2>&1 && chk "isolation: ping after ns-3 stopped" "STILL REACHABLE" || chk "isolation: no ping after ns-3 stopped" ok
 grep -q '"valid_ns3_lag": true' "$OUT/ns3/summary.json" 2>/dev/null && chk "ns-3 lag within limit ($(grep max_lag_ms "$OUT/ns3/summary.json" | head -1 | tr -d ' ,'))" ok || chk "ns-3 lag" "$(tr -d '\n' < "$OUT/ns3/summary.json" 2>/dev/null)"
+want=$(python3 -c "import yaml,sys; w=yaml.safe_load(open(sys.argv[1]))['network']['wifi']; print(w['standard'], w['data_mode'])" "$CFG")
+got=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['wifi_standard'], d['wifi_data_mode'])" "$OUT/ns3/summary.json" 2>/dev/null)
+[ "$want" = "$got" ] && chk "ns-3 emulated the configured technology (standard / data rate: $got)" ok || chk "configured technology reached ns-3" "wanted '$want', ns-3 ran '${got:-nothing}'"
 echo "logs: $OUT"; exit $fail
