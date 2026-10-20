@@ -19,7 +19,9 @@ demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-prompt]  
 ```
 
 The simulation runs in the containers; two windows open on the host: the **Gazebo GUI**, attached to the simulator container, and a **live 2D map**
-(`tools/plot_comm_map.py --live`) that redraws about twice a second from the poses ns-3 is applying, with every agent pair coloured dark green (strong) to red (weak).
+(`tools/plot_comm_map.py --live`) that redraws about twice a second from what ns-3 is logging, with every agent pair coloured dark green (strong) to red (weak). The signal of each pair is read from
+ns-3 itself (`ns3/pair_rssi.csv`: the scenario evaluates its own propagation loss chain for every ordered pair on the current node positions), so it follows any
+change of layout, agent count, transmit power or loss model in the YAML without touching the tool.
 The script starts the stack and holds the vehicles on the ground, opens the windows and frames an overview camera, and flies when you press Enter
 (`--no-prompt`: after 5 s). No sudo. It needs a desktop session, matplotlib with Tk (`python3-tk`), and Gazebo Harmonic and PX4's models on the host for the GUI
 (see [SETUP.md](SETUP.md)); `--no-gui` and `--no-map` drop either window.
@@ -179,6 +181,8 @@ A technology is an ns-3 scenario program plus one registry line. `network.techno
      by that agent's `tap:`; give the nodes **no** IP stack, since addresses live on the Linux side;
    - use ns-3's real-time simulator (`RealtimeSimulatorImpl`) and enable checksums;
    - apply positions from the pose feed (UDP/JSON to `network.pose`; the listener in `wifi_adhoc_tap.cc` can be reused as is);
+   - write `pair_rssi.csv` (`t_s,tx,rx,distance_m,rssi_dbm,below_floor`: the power a frame from `tx` would reach `rx` with, from the technology's own loss model, per
+     `network.link_log_interval_s`) if you want the signal map to work; without it the tool falls back to a LogDistance estimate from the YAML and says so on the figure;
    - write `summary.json` (`ns3_max_lag_ms`, `valid_ns3_lag`) and `lag.csv` (`t_s,lag_ms`, one row per simulated second) into `--log-dir`, and stop cleanly on SIGTERM.
      The `ns3` container is healthy once `lag.csv` has a data row.
 2. **Build it into the image.** Scenarios under `ns3/scenarios/*/` are copied into the image and built; add the new target to the `ns3 build` line

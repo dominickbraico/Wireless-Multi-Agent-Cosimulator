@@ -28,6 +28,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `network.technology` | Radio technology = which ns-3 scenario runs (default and only built-in: `wifi`). See [CONTAINERS.md](CONTAINERS.md), "Changing the networking technology" |
 | `network.wifi` | `standard` (`80211a`, `80211g`, `80211n`, `80211ac`, `80211ax`), `band`, `mac`, `rate_manager`, `data_mode`, `control_mode`, `tx_power_dbm`, `error_rate_model` (`TableBased` or `Nist`), `retry_limit`, `phy.*` receiver parameters |
 | `network.channel` | `loss` (propagation loss models), `delay` |
+| `network.link_log_interval_s` | Optional (default 0.5, 0 = off): how often ns-3 logs the signal strength of every ordered agent pair to `pair_rssi.csv` (simulated seconds) |
 | `network.pose` | Pose feed: `transport`, `listen_addr`, `port`, `rate_hz`. Omit the section to run with static positions |
 | `network.radio_subnet` | Subnet of the emulated radio, e.g. `10.10.0.0/24` |
 | `network.radio_firewall` | `enabled`, `allow_udp_ports` (the RTPS ports of the swarm DDS domain) |

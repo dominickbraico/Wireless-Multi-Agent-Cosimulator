@@ -8,6 +8,7 @@
 #include "ns3/core-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
+#include "ns3/propagation-module.h"
 #include "ns3/realtime-simulator-impl.h"
 #include "ns3/tap-bridge-module.h"
 #include "ns3/wifi-module.h"
@@ -70,6 +71,7 @@ struct Cfg
     double preambleSnrDb = 4.0;
     double ccaEdDbm = -62.0;
     double rxSensDbm = -101.0;
+    double linkLogIntervalS = 0.5; // pair_rssi.csv sampling period (simulated seconds); 0 disables
     std::string errorModel = "TableBased";
     std::vector<LossCfg> loss;
     std::vector<AgentCfg> agents;
@@ -137,6 +139,8 @@ LoadConfig(const std::string& path)
     c.ctrlMode = w["control_mode"].as<std::string>();
     c.txPowerDbm = w["tx_power_dbm"].as<double>();
     c.retryLimit = (w["retry_limit"] && !w["retry_limit"].IsNull()) ? w["retry_limit"].as<int>() : -1;
+
+    c.linkLogIntervalS = y["network"]["link_log_interval_s"].as<double>(c.linkLogIntervalS);
 
     if (auto ph = w["phy"])
     {
@@ -243,6 +247,70 @@ SnifferRx(uint32_t nodeId,
     g_rssiCsv << std::fixed << std::setprecision(6) << Simulator::Now().GetSeconds() << "," << nodeId
               << "," << sn.signal << "," << sn.noise << "," << pkt->GetSize() << ","
               << txv.GetMode().GetUniqueName() << "," << WallNow() << "\n";
+}
+
+// ---- propagation loss chain ----
+// Built once here and handed to the channel, so the per-pair signal log below asks the very object ns-3 uses to attenuate
+// frames: any model added to network.channel.loss (once the scenario builds it here) shows up in both.
+Ptr<PropagationLossModel>
+BuildLossChain(const Cfg& cfg)
+{
+    Ptr<PropagationLossModel> first;
+    Ptr<PropagationLossModel> prev;
+    for (const auto& l : cfg.loss)
+    {
+        Ptr<LogDistancePropagationLossModel> m = CreateObject<LogDistancePropagationLossModel>();
+        m->SetAttribute("Exponent", DoubleValue(l.exponent));
+        m->SetAttribute("ReferenceDistance", DoubleValue(l.refDistance));
+        m->SetAttribute("ReferenceLoss", DoubleValue(l.refLoss));
+        if (!first)
+        {
+            first = m;
+        }
+        else
+        {
+            prev->SetNext(m);
+        }
+        prev = m;
+    }
+    return first;
+}
+
+// ---- per-pair signal strength ----
+// For every ordered pair of agents, the power a frame sent by `tx` would arrive with at `rx` right now: the channel's own
+// loss chain evaluated on the current ghost-node positions (which follow the pose feed). Independent of traffic, so it
+// exists for pairs that never talk and follows any change of topology. below_floor = under the receiver's
+// preamble-detection RSSI floor (no frame between the pair would be detected). Tx/Rx antenna gains are the ns-3
+// defaults (0 dB) and are not applied.
+std::ofstream g_pairCsv;
+
+void
+LinkLogTick(Ptr<PropagationLossModel> loss,
+            NodeContainer nodes,
+            std::vector<std::string> names,
+            double txPowerDbm,
+            double floorDbm,
+            double intervalS)
+{
+    const double t = Simulator::Now().GetSeconds();
+    for (uint32_t i = 0; i < nodes.GetN(); ++i)
+    {
+        Ptr<MobilityModel> a = nodes.Get(i)->GetObject<MobilityModel>();
+        for (uint32_t j = 0; j < nodes.GetN(); ++j)
+        {
+            if (i == j)
+            {
+                continue;
+            }
+            Ptr<MobilityModel> b = nodes.Get(j)->GetObject<MobilityModel>();
+            const double rssi = loss->CalcRxPower(txPowerDbm, a, b);
+            g_pairCsv << std::fixed << std::setprecision(6) << t << "," << names[i] << "," << names[j] << ","
+                      << std::setprecision(3) << a->GetDistanceFrom(b) << "," << rssi << ","
+                      << (rssi < floorDbm ? 1 : 0) << "\n";
+        }
+    }
+    g_pairCsv.flush();
+    Simulator::Schedule(Seconds(intervalS), &LinkLogTick, loss, nodes, names, txPowerDbm, floorDbm, intervalS);
 }
 
 // ---- graceful shutdown: SIGTERM/SIGINT -> stop the simulation so logs and summary.json are written ----
@@ -426,18 +494,11 @@ main(int argc, char* argv[])
     // ONE shared channel object for all agents (shared medium).
     YansWifiChannelHelper channel;
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-    for (const auto& l : cfg.loss)
-    {
-        channel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
-                                   "Exponent",
-                                   DoubleValue(l.exponent),
-                                   "ReferenceDistance",
-                                   DoubleValue(l.refDistance),
-                                   "ReferenceLoss",
-                                   DoubleValue(l.refLoss));
-    }
+    Ptr<YansWifiChannel> yansChannel = channel.Create();
+    Ptr<PropagationLossModel> lossChain = BuildLossChain(cfg);
+    yansChannel->SetPropagationLossModel(lossChain);
     YansWifiPhyHelper phy;
-    phy.SetChannel(channel.Create());
+    phy.SetChannel(yansChannel);
     phy.Set("TxPowerStart", DoubleValue(cfg.txPowerDbm));
     phy.Set("TxPowerEnd", DoubleValue(cfg.txPowerDbm));
     phy.SetErrorRateModel("ns3::" + cfg.errorModel + "ErrorRateModel");
@@ -501,6 +562,25 @@ main(int argc, char* argv[])
             MakeBoundCallback(&SnifferRx, ghosts.Get(i)->GetId()));
     }
 
+    if (cfg.linkLogIntervalS > 0)
+    {
+        g_pairCsv.open(cfg.logDir + "/pair_rssi.csv");
+        g_pairCsv << "t_s,tx,rx,distance_m,rssi_dbm,below_floor\n";
+        std::vector<std::string> names;
+        for (const auto& a : cfg.agents)
+        {
+            names.push_back(a.name);
+        }
+        Simulator::Schedule(Seconds(0),
+                            &LinkLogTick,
+                            lossChain,
+                            ghosts,
+                            names,
+                            cfg.txPowerDbm,
+                            cfg.preambleMinRssiDbm,
+                            cfg.linkLogIntervalS);
+    }
+
     g_lagCsv.open(cfg.logDir + "/lag.csv");
     g_lagCsv << "t_s,lag_ms\n";
     Ptr<RealtimeSimulatorImpl> rt = DynamicCast<RealtimeSimulatorImpl>(Simulator::GetImplementation());
@@ -549,6 +629,7 @@ main(int argc, char* argv[])
 
     g_lagCsv.close();
     g_rssiCsv.close();
+    g_pairCsv.close();
 
     bool lagValid = g_maxLagMs <= cfg.maxLagMs;
     std::ofstream sum(cfg.logDir + "/summary.json");

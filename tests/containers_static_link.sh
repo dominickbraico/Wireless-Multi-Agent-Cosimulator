@@ -64,6 +64,30 @@ frames=$(dc exec -T ns3 sh -c 'tcpdump -r /logs/ns3/wifi-0-0.pcap -nn 2>/dev/nul
 dc stop ns3 >/dev/null 2>&1
 dc exec -T agent1 ping -c 3 -W 1 "$R2" >/dev/null 2>&1 && chk "isolation: ping after ns-3 stopped" "STILL REACHABLE" || chk "isolation: no ping after ns-3 stopped" ok
 grep -q '"valid_ns3_lag": true' "$OUT/ns3/summary.json" 2>/dev/null && chk "ns-3 lag within limit ($(grep max_lag_ms "$OUT/ns3/summary.json" | head -1 | tr -d ' ,'))" ok || chk "ns-3 lag" "$(tr -d '\n' < "$OUT/ns3/summary.json" 2>/dev/null)"
+# per-pair signal log (what tools/plot_comm_map.py draws): complete, equal to the YAML link-budget formula for these static
+# positions, and equal to the signal every receiver actually measured on the frames it got
+res=$(python3 - "$CFG" "$OUT/ns3" "$ROOT/tools" <<'PY'
+import csv, sys, collections, math
+sys.path.insert(0, sys.argv[3]); import plot_comm_map as pm, yaml
+cfg = yaml.safe_load(open(sys.argv[1])); d = sys.argv[2]
+names = [a["name"] for a in cfg["agents"]]; n = len(names)
+try: rows = list(csv.DictReader(open(d + "/pair_rssi.csv")))
+except FileNotFoundError: print("no pair_rssi.csv"); sys.exit()
+ticks = collections.defaultdict(dict)
+for r in rows: ticks[r["t_s"]][(r["tx"], r["rx"])] = (float(r["rssi_dbm"]), float(r["distance_m"]))
+full = [t for t in ticks.values() if len(t) == n * (n - 1)]
+if not full: print("no complete sample of %d ordered pairs" % (n * (n - 1))); sys.exit()
+worst = max(abs(v - pm.rx_power_dbm(cfg, dist)) for v, dist in full[0].values())
+if worst > 0.01: print("logged value differs from the YAML formula by %.3f dB" % worst); sys.exit()
+logged = collections.defaultdict(set)
+for (tx, rx), (v, _) in full[0].items(): logged[rx].add(v)
+meas = collections.defaultdict(list)
+for r in csv.DictReader(open(d + "/rssi.csv")): meas[names[int(r["rx_node"])]].append(float(r["signal_dbm"]))
+bad = [(rx, s) for rx, sig in meas.items() for s in set(round(x, 2) for x in sig) if not any(abs(s - v) < 0.01 for v in logged[rx])]
+print("ok" if not bad and meas else "measured signal not in the pair log: %s" % bad[:3])
+PY
+)
+[ "$res" = ok ] && chk "ns-3 pair signal log: complete, equals the YAML formula and the signal the receivers measured" ok || chk "ns-3 pair signal log" "$res"
 want=$(python3 -c "import yaml,sys; w=yaml.safe_load(open(sys.argv[1]))['network']['wifi']; print(w['standard'], w['data_mode'])" "$CFG")
 got=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['wifi_standard'], d['wifi_data_mode'])" "$OUT/ns3/summary.json" 2>/dev/null)
 [ "$want" = "$got" ] && chk "ns-3 emulated the configured technology (standard / data rate: $got)" ok || chk "configured technology reached ns-3" "wanted '$want', ns-3 ran '${got:-nothing}'"
