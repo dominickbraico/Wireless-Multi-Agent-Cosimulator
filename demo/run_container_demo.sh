@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# The containerized leader-follower flight with the Gazebo GUI and a LIVE 2D map of every agent pair's signal strength.
+# The containerized flight (the YAML's scenario: leader-follower, or the mesh-dropout demonstration) with the Gazebo GUI and a LIVE 2D map of every agent pair's signal strength.
 # The simulation runs in Docker (one container per agent, ns-3, simulator); the Gazebo GUI and the map window run on the host.
 #
 #   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-prompt]
 #
-#   --config Y   experiment YAML (default: config/experiments/five_agent_wifi.yaml)
+#   --config Y   experiment YAML (default: config/experiments/five_agent_wifi.yaml). Its `scenario.type` picks the flight: leader_follower (default) or mesh_dropout,
+#                e.g. --config config/experiments/four_agent_mesh_dropout_baylands.yaml (docs/MESH_DROPOUT.md)
 #   --world N    Gazebo world (default: from the YAML; Fuel models, e.g. baylands, are downloaded once into a host cache, see docs/CONTAINERS.md)
 #   --no-gui     do not open the Gazebo GUI           --no-map  do not open the live map
 #   --no-prompt  start the flight after a 5 s countdown instead of waiting for Enter
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host
 # (for the GUI) and python3 with matplotlib + Tk (for the map). No sudo.
-# Env: SIDE (square side, default 14 m), ALT (default 6 m), SPEED (default 1.5 m/s)
+# Env: SIDE (square side, default 14 m), ALT (default 6 m), SPEED (default 1.5 m/s)   (leader-follower only; the mesh-dropout plan comes from the YAML)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GUI=1; MAP=1; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
@@ -23,6 +24,12 @@ while [ $# -gt 0 ]; do case "$1" in
 CFG="$(cd "$(dirname "$CFG")" && pwd)/$(basename "$CFG")"
 OUT="$ROOT/logs/container_demo_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$OUT"
 SIDE="${SIDE:-14.0}"; ALT="${ALT:-6.0}"; SPEED="${SPEED:-1.5}"
+SCEN="$(python3 -c "import yaml,sys; print((yaml.safe_load(open(sys.argv[1])).get('scenario') or {}).get('type', 'leader_follower'))" "$CFG")"
+case "$SCEN" in
+  leader_follower) TESTSCRIPT="$ROOT/tests/containers_leader_follower.sh";;
+  mesh_dropout)    TESTSCRIPT="$ROOT/tests/containers_mesh_dropout.sh";;
+  *) echo "unknown scenario.type '$SCEN' in $CFG"; exit 2;;
+esac
 TESTPID=""; GUIPID=""; MAPPID=""
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 on_exit() {
@@ -53,7 +60,7 @@ echo "logs: $OUT   (host reaches the simulator from $GWIP, gz partition $GZPART)
 say "Starting the containers: simulator, ns-3 and one per agent (about 1 to 3 min)"
 # PX4_WORLD empty means the YAML's world (the test script only passes --world when it is non-empty)
 WAIT_FOR_GUI=1 OUT="$OUT" SIDE="$SIDE" ALT="$ALT" SPEED="$SPEED" PX4_WORLD="$WORLD" \
-  "$ROOT/tests/containers_leader_follower.sh" --config "$CFG" > "$OUT/test.out" 2>&1 &
+  "$TESTSCRIPT" --config "$CFG" > "$OUT/test.out" 2>&1 &
 TESTPID=$!
 for i in $(seq 1 400); do grep -q "waiting on the ground" "$OUT/test.out" 2>/dev/null && break
   kill -0 $TESTPID 2>/dev/null || { echo "stack failed to start:"; tail -20 "$OUT/test.out"; exit 1; }; sleep 1; done
@@ -98,11 +105,15 @@ else
   say "Starting the flight in 5 s"; sleep 5
 fi
 touch "$OUT/go"
-say "Flying: take-off, the leader flies a ${SIDE} m square, the followers track it over the emulated link (about 90 s)"
+if [ "$SCEN" = mesh_dropout ]; then
+  say "Flying: take-off, the wanderer flies its seeded random path and an excursion that drops links, then returns to its spawn point (about 2 to 3 min)"
+else
+  say "Flying: take-off, the leader flies a ${SIDE} m square, the followers track it over the emulated link (about 90 s)"
+fi
 wait $TESTPID; RC=$?
 TESTPID=""
 say "Finished. Checks:"
-grep -E "^(PASS|FAIL)|formation error|swarm link" "$OUT/test.out" | cut -c1-170
+grep -E "^(PASS|FAIL)|^plan:|formation error|swarm link|^heartbeats:" "$OUT/test.out" | cut -c1-200
 grep -h "^note  RTF" "$OUT/test.out" | cut -c1-230
 if grep -q "^note  RTF" "$OUT/test.out"; then
   echo "(Attaching the Gazebo GUI makes the simulator pause for a moment while it sends the scene. That happens on the ground before take-off, so the check"
@@ -111,7 +122,11 @@ fi
 if grep -q "^FAIL  Gazebo RTF" "$OUT/test.out"; then
   echo "The real-time factor fell under the threshold DURING the flight (not the GUI attach). Dips under 0.5 at sim times: $(awk -F, 'NR>1 && $3<0.5 {printf "%d ", $2}' "$OUT/bridge/rtf.csv")"
 fi
-echo; echo "Final map: $OUT/comm_map.png     plots: $OUT/formation.png     all logs: $OUT"
+if [ "$SCEN" = mesh_dropout ]; then
+  echo; echo "Maps before / during / after the dropout: $OUT/comm_map_dropout.png     timeline: $OUT/mesh_dropout.png     all logs: $OUT"
+else
+  echo; echo "Final map: $OUT/comm_map.png     plots: $OUT/formation.png     all logs: $OUT"
+fi
 if [ $PROMPT = 1 ] && { [ -n "$GUIPID" ] || [ -n "$MAPPID" ]; }; then
   echo "The Gazebo and map windows stay open. Press Enter to close them."; read -r _
 fi
