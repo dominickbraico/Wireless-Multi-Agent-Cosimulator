@@ -206,8 +206,7 @@ Wi-Fi devices.
 
 ## Scenarios
 
-The agent containers run the leader-follower flight by default. `scenario.type: mesh_dropout` in the experiment YAML swaps it for the mesh-dropout demonstration (a wandering agent whose links to the others
-drop and recover, with a heartbeat on the radio): `orchestrator/scenario_mesh.py` is called from `agent_main.py` after PX4 is ready, and nothing else in the stack changes. Run it with
+The agent containers run the leader-follower flight by default. `scenario.type: mesh_dropout` in the experiment YAML swaps it for the mesh-dropout demonstration (agents flying seeded random paths whose links drop and recover, with a heartbeat on the radio): `orchestrator/scenario_mesh.py` is called from `agent_main.py` after PX4 is ready, and nothing else in the stack changes. Run it with
 `tests/containers_mesh_dropout.sh` or `demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml`; see [MESH_DROPOUT.md](MESH_DROPOUT.md).
 
 ## Worlds, including custom ones and worlds that download models

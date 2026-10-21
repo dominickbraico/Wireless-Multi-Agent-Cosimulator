@@ -44,7 +44,7 @@ tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.
 demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a live signal-strength map
 ```
 
-A second scenario in Docker, in which one agent flies a seeded random path out of radio range and back so that links drop and recover ([docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md)):
+A second scenario in Docker, in which every agent flies a seeded random path and returns to its spawn point so that links drop and recover ([docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md)):
 
 ```
 tests/containers_mesh_dropout.sh --config config/experiments/four_agent_mesh_dropout.yaml
