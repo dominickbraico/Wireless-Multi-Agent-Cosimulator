@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mesh_control</name>
+  <version>0.1.0</version>
+  <description>Mesh-dropout scenario: all-to-all heartbeat on the emulated radio and a seeded random flight that makes links drop and recover.</description>
+  <maintainer email="dominickbraico32@gmail.com">Dominick</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>mesh_msgs</depend>
+  <depend>swarm_control</depend>
+  <depend>px4_offboard_control</depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

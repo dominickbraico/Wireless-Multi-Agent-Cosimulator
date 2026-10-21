@@ -4,7 +4,8 @@
     agent_main.py     (configured through the environment set by compose_gen.py)
 
 COSIM_MODE=net     nothing to run: the radio interface exists, the container idles (link tests drive it with `exec`).
-COSIM_MODE=flight  1. Micro XRCE-DDS Agent and PX4 SITL (attached to the physics simulator named in the YAML)
+COSIM_MODE=flight  (the leader-follower scenario below; `scenario.type: mesh_dropout` in the YAML swaps steps 2-4 for orchestrator/scenario_mesh.py)
+                   1. Micro XRCE-DDS Agent and PX4 SITL (attached to the physics simulator named in the YAML)
                    2. swarm node on the radio (leader publishes, follower subscribes); writes /logs/<agent>.px4_ready first
                    3. waits for /logs/go (written by the test driver once every agent is ready), then the flight node:
                         leader   square_trajectory; after landing, stops its swarm node (followers must then see the link go)
@@ -67,6 +68,14 @@ def main():
         supervise.stop_all()
     open(f"{LOGS}/{name}.px4_ready", "w").close()
     print(f"agent_main[{name}]: PX4 ready", flush=True)
+
+    scenario = (cfg.get("scenario") or {}).get("type", "leader_follower")
+    if scenario == "mesh_dropout":                       # a different flight; everything above (PX4, XRCE) is shared
+        import scenario_mesh
+        return scenario_mesh.run(cfg, agent, name, inst, (sx, sy), LOGS, DDS)
+    if scenario != "leader_follower":
+        print(f"agent_main[{name}]: unknown scenario.type '{scenario}' (leader_follower, mesh_dropout)", flush=True)
+        supervise.stop_all()
 
     # swarm node: the only process on the radio domain
     senv = dict(os.environ, SWARM_MODE="px4", CYCLONEDDS_URI=f"file://{DDS}/cyclonedds_agent.xml")
