@@ -15,7 +15,7 @@ Tested with Docker 29.7 and Compose 5.5 on Ubuntu 24.04. The native deployment (
 ## Live demo: Gazebo GUI and live signal map
 
 ```
-demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--no-prompt]      # default config: five_agent_wifi.yaml
+demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--no-prompt]      # default config: five_agent_wifi.yaml
 ```
 
 The simulation runs in the containers; two windows open on the host: the **Gazebo GUI**, attached to the simulator container, and a **live 2D map**
@@ -25,7 +25,7 @@ change of layout, agent count, transmit power or loss model in the YAML without 
 The script starts the stack and holds the vehicles on the ground, opens the windows and frames an overview camera, and flies when you press Enter
 (`--no-prompt`: after 5 s). No sudo. It needs a desktop session, matplotlib with Tk (`python3-tk`), and Gazebo Harmonic and PX4's models on the host for the GUI
 (see [SETUP.md](SETUP.md)); `--no-gui` and `--no-map` drop either window.
-For `mesh_dropout` configs the GUI also shows each agent's planned path as a red line and a yellow halo on each vehicle (`demo/path_markers.py`; `--no-markers` omits them). They are Gazebo GUI markers: drawn on the host GUI only, not part of the simulated world, and absent from physics and sensors. The line is the plan (straight legs at each agent's planned altitude), not the flown trajectory; the vehicles follow it with a lag.
+The GUI also shows a yellow halo on each vehicle and a red line that grows behind it as it flies (`demo/path_markers.py --trace`, which follows `ns3/pose_applied.csv`, the poses ns-3 applied; one leg per metre moved). `--show-plan` adds each agent's planned path (`mesh_dropout` configs), `--no-markers` omits all of it. These are Gazebo GUI markers: drawn on the host GUI only, not part of the simulated world, absent from physics and sensors. They stay in that GUI until it closes (the trace is cleared when the next run starts drawing).
 
 How the GUI reaches the container: the host's `gz` joins the `cosim` Gazebo partition from the Docker bridge's gateway address on `mgmt` (`10.20.0.254` by default,
 `mgmt.gateway` in `containers.py`). The agents' management firewall ignores it (only the simulator is allowed), and the GUI is not part of the experiment.

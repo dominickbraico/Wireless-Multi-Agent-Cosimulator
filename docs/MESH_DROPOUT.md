@@ -28,7 +28,7 @@ logs) and the usual ns-3 and flight logs.
 ## What happens in `roam` mode
 
 - **Plan** (`orchestrator/mesh_plan.py`, a pure function of the YAML including the seed, so every container computes the same plan): each agent draws random waypoints inside `arena_radius_m` (40 m) of the
-  centre of the spawn points, until its path lasts at least `min_flight_s` (70 s at `speed_mps`, 3 m/s), then returns to its spawn point. A candidate set of four paths is kept only if a simulation of the whole
+  centre of the spawn points, until its path lasts at least `min_flight_s` (default 70 s; the shipped configs set 40 s; at `speed_mps`, 3 m/s), then returns to its spawn point. A candidate set of four paths is kept only if a simulation of the whole
   flight shows **(1)** never more than `max_dropped_links` (2) links at risk at once, where "at risk" means a 3-D distance above *D* minus `margin_m` (3 m), and **(2)** at least `min_drop_events` (2) clear
   drops, where "clear" means a distance above *D* plus the margin for at least `min_drop_s` (6 s). *D* is where the YAML's own signal model reaches the receiver floor (about 51.4 m for the default;
   [SIGNAL_MODEL.md](SIGNAL_MODEL.md)). The simulation lets each vehicle follow its setpoint `tracking_lag_s` (1 s) late. Candidates are drawn from the seed until one qualifies (a median of 10 candidates over

@@ -71,7 +71,7 @@ scenario:
     max_dropped_links: 2       # a plan is kept only if never more than this many links are at risk (distance > D - margin) at once ...
     min_drop_events: 2         # ... and at least this many links clearly drop (distance > D + margin for min_drop_s)
     min_drop_s: 6.0
-    min_flight_s: 70.0         # each agent's path lasts at least this long; all agents land together at the end
+    min_flight_s: 40.0         # each agent's path lasts at least this long; all agents land together at the end
     end_hold_s: 5.0
     tracking_lag_s: 1.0        # how late a vehicle follows its setpoint (the planner predicts link states from lagged positions)
     # mode excursion:

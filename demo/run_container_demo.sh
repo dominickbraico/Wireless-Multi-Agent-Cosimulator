@@ -2,22 +2,22 @@
 # The containerized flight (the YAML's scenario: leader-follower, or the mesh-dropout demonstration) with the Gazebo GUI and a LIVE 2D map of every agent pair's signal strength.
 # The simulation runs in Docker (one container per agent, ns-3, simulator); the Gazebo GUI and the map window run on the host.
 #
-#   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-markers] [--no-prompt]
+#   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--no-prompt]
 #
 #   --config Y   experiment YAML (default: config/experiments/five_agent_wifi.yaml). Its `scenario.type` picks the flight: leader_follower (default) or mesh_dropout,
 #                e.g. --config config/experiments/four_agent_mesh_dropout_baylands.yaml (docs/MESH_DROPOUT.md)
 #   --world N    Gazebo world (default: from the YAML; Fuel models, e.g. baylands, are downloaded once into a host cache, see docs/CONTAINERS.md)
 #   --no-gui     do not open the Gazebo GUI           --no-map  do not open the live map
-#   --no-markers do not draw the red planned paths and yellow halos in the Gazebo GUI (demo/path_markers.py)
+#   --no-markers do not draw the red flown path and yellow halos in the Gazebo GUI (demo/path_markers.py); --show-plan also draws the planned paths
 #   --no-prompt  start the flight after a 5 s countdown instead of waiting for Enter
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host
 # (for the GUI) and python3 with matplotlib + Tk (for the map). No sudo.
 # Env: SIDE (square side, default 14 m), ALT (default 6 m), SPEED (default 1.5 m/s)   (leader-follower only; the mesh-dropout plan comes from the YAML)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GUI=1; MAP=1; MARKERS=1; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
+GUI=1; MAP=1; MARKERS=1; SHOWPLAN=""; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
 while [ $# -gt 0 ]; do case "$1" in
-  --no-gui) GUI=0;; --no-map) MAP=0;; --no-markers) MARKERS=0;; --no-prompt) PROMPT=0;;
+  --no-gui) GUI=0;; --no-map) MAP=0;; --no-markers) MARKERS=0;; --show-plan) SHOWPLAN=1;; --no-prompt) PROMPT=0;;
   --world) shift; WORLD="${1:?--world needs a name}";;
   --config) shift; CFG="${1:?--config needs a path}";; --config=*) CFG="${1#--config=}";;
   *) echo "unknown option $1"; exit 2;; esac; shift; done
@@ -31,11 +31,12 @@ case "$SCEN" in
   mesh_dropout)    TESTSCRIPT="$ROOT/tests/containers_mesh_dropout.sh";;
   *) echo "unknown scenario.type '$SCEN' in $CFG"; exit 2;;
 esac
-TESTPID=""; GUIPID=""; MAPPID=""
+TESTPID=""; GUIPID=""; MAPPID=""; MARKPID=""
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 on_exit() {
   trap - INT TERM EXIT
   [ -n "$MAPPID" ] && kill "$MAPPID" 2>/dev/null
+  [ -n "$MARKPID" ] && kill "$MARKPID" 2>/dev/null
   [ -n "$GUIPID" ] && kill "$GUIPID" 2>/dev/null
   if [ -n "$TESTPID" ] && kill -0 "$TESTPID" 2>/dev/null; then
     echo "stopping the simulation..."; kill -TERM "$TESTPID" 2>/dev/null
@@ -98,8 +99,9 @@ if [ $GUI = 1 ]; then
         && echo "overview camera set (drag in the GUI to adjust)" || echo "could not set the camera automatically; adjust it by hand"
     # red planned paths + yellow halo on every vehicle (GUI-side markers only; demo/path_markers.py)
     if [ $MARKERS = 1 ]; then
-      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" 2>&1 | tee "$OUT/markers.log" \
-        || echo "could not draw the path markers"
+      # halos now, then a red line that grows behind each vehicle (stopped when the demo exits); --show-plan adds the planned paths
+      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" --trace "$OUT" ${SHOWPLAN:+--plan} > "$OUT/markers.log" 2>&1 &
+      MARKPID=$!; echo "drawing each vehicle's flown path in the GUI (red)"
     fi
   fi
 fi
@@ -123,6 +125,7 @@ else
 fi
 wait $TESTPID; RC=$?
 TESTPID=""
+[ -n "$MARKPID" ] && { kill "$MARKPID" 2>/dev/null; MARKPID=""; }     # the drawn trace stays in the GUI
 say "Finished. Checks:"
 grep -E "^(PASS|FAIL)|^plan:|formation error|swarm link|^heartbeats:" "$OUT/test.out" | cut -c1-200
 grep -h "^note  RTF" "$OUT/test.out" | cut -c1-230
