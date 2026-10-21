@@ -44,6 +44,13 @@ tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.
 demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a live signal-strength map
 ```
 
+A second scenario in Docker, in which one agent flies a seeded random path out of radio range and back so that links drop and recover ([docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md)):
+
+```
+tests/containers_mesh_dropout.sh --config config/experiments/four_agent_mesh_dropout.yaml
+demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml   # Baylands, Gazebo GUI + live map
+```
+
 ## Documentation
 
 | Document | Contents |
@@ -52,6 +59,7 @@ demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a li
 | [docs/CONTAINERS.md](docs/CONTAINERS.md) | Docker deployment, container networking, the physics-simulator container, adding Isaac Sim, changing the network technology |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, emulation path, DDS domains, swarm protocol, limitations |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | The experiment YAML, agents, roles, positions |
+| [docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md) | The mesh-dropout scenario: links dropping and recovering, with heartbeat measurements |
 | [docs/SIGNAL_MODEL.md](docs/SIGNAL_MODEL.md) | How the map's signal strength is calculated: equation, parameters, defaults, origin, limitations |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | Tests, outputs, pass criteria, reference results |
 | [ns3/patches/README.md](ns3/patches/README.md) | The local ns-3 patch |

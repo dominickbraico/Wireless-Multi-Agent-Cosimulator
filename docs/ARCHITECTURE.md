@@ -104,6 +104,9 @@ PX4 instance *N* publishes under `/px4_N/fmu/...` (instance 0 has no prefix) and
 
 ## Swarm protocol
 
+This section describes the leader-follower scenario (the default). A second scenario, `scenario.type: mesh_dropout`, runs an all-to-all heartbeat (`mesh_msgs/PeerState` on `/mesh/peer_state`, same domain 42 and firewall)
+while one agent flies out of radio range and back: see [MESH_DROPOUT.md](MESH_DROPOUT.md).
+
 The only inter-robot message is `swarm_msgs/LeaderState`: sender id, per-sender sequence number, send timestamp, position and
 velocity in a shared world frame (ENU, metres). By default it uses best-effort, volatile, keep-last-1 QoS, so loss is visible rather than hidden
 by retransmission; the profile is configurable (`swarm.qos.leader_state`, see CONFIGURATION.md). Sequence numbers and timestamps give loss and latency without extra instrumentation.

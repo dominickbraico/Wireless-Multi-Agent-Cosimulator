@@ -35,7 +35,8 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `network.mgmt` | Unemulated management network between the simulator and the robots |
 | `agents` | One entry per robot (below) |
 | `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
-| `swarm.qos.leader_state` | Optional: DDS QoS of the radio-side topic `/swarm/leader_state` (below). Default `best_effort`, `volatile`, depth 1 |
+| `swarm.qos.leader_state`, `swarm.qos.peer_state` | Optional: DDS QoS of the radio-side topics `/swarm/leader_state` (leader-follower) and `/mesh/peer_state` (mesh dropout) (below). Default `best_effort`, `volatile`, depth 1 (10 for `peer_state`) |
+| `scenario` | Optional: `type` (`leader_follower`, the default, or `mesh_dropout`) and, for the latter, the `mesh_dropout` keys: see [MESH_DROPOUT.md](MESH_DROPOUT.md) |
 | `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
@@ -112,9 +113,10 @@ loss stays visible (sequence gaps) and no retransmission load is added to the sh
 agents plan around, because a lost one is otherwise invisible; on 802.11 it converts loss into latency, so check `latency_ms`
 in `swarm_follower_*.csv`. `transient_local` hands a late-joining agent the last sample. Samples larger than one 1500-byte frame
 are fragmented, and under `best_effort` losing one fragment loses the sample. Further topics (for example a committed
-trajectory) are added as further keys under `swarm.qos`; only `leader_state` exists today.
+trajectory) are added as further keys under `swarm.qos`; `leader_state` and `peer_state` exist today. `peer_state` (the mesh-dropout heartbeat) defaults to depth 10, not 1: the topic has no key and
+several publishers, so a subscriber's keep-last history is shared by all senders and depth 1 lets simultaneous heartbeats overwrite each other ([MESH_DROPOUT.md](MESH_DROPOUT.md)).
 
-Applies to `tests/leader_follower_fly.sh` and the container deployment (the demos use those). `tests/swarm_leader_follower.sh`
+Applies to `tests/leader_follower_fly.sh`, `tests/containers_mesh_dropout.sh` (`peer_state`) and the container deployment (the demos use those). `tests/swarm_leader_follower.sh`
 and the sweep scripts start the node by hand and use its defaults.
 
 ## Adding robots

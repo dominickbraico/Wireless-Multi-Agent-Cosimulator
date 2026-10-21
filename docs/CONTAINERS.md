@@ -204,6 +204,12 @@ Notes: the radio firewall allows only the swarm DDS UDP ports, which stays corre
 that cannot carry multicast or large frames will change how the swarm DDS domain behaves; the tests report that. `ns3/patches/0001-...` is specific to
 Wi-Fi devices.
 
+## Scenarios
+
+The agent containers run the leader-follower flight by default. `scenario.type: mesh_dropout` in the experiment YAML swaps it for the mesh-dropout demonstration (a wandering agent whose links to the others
+drop and recover, with a heartbeat on the radio): `orchestrator/scenario_mesh.py` is called from `agent_main.py` after PX4 is ready, and nothing else in the stack changes. Run it with
+`tests/containers_mesh_dropout.sh` or `demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml`; see [MESH_DROPOUT.md](MESH_DROPOUT.md).
+
 ## Worlds, including custom ones and worlds that download models
 
 A world is `worlds/<name>.sdf`. The file name must equal the `<world name="...">` inside it (the pose topic and the health check use
