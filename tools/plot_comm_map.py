@@ -70,6 +70,30 @@ def rx_power_dbm(cfg, d):
     return p
 
 
+def tx_power_dbm(cfg):
+    return float(cfg["network"]["wifi"]["tx_power_dbm"])
+
+
+def dropout_range_m(cfg, floor):
+    """Distance (m) at which the modelled signal falls to the dropout floor, by bisection over the same chain of losses
+    (received power only decreases with distance for LogDistance). None if it does not reach the floor within 100 km."""
+    lo, hi = 1e-3, 1e5
+    if rx_power_dbm(cfg, hi) >= floor:
+        return None
+    for _ in range(80):
+        mid = (lo * hi) ** 0.5
+        lo, hi = (mid, hi) if rx_power_dbm(cfg, mid) >= floor else (lo, mid)
+    return hi
+
+
+def info_text(cfg, floor):
+    """Two lines for the figure: what every radio transmits with, where a link drops out, and how far that is."""
+    r = dropout_range_m(cfg, floor)
+    reach = f"With this channel model the signal reaches the floor at about {r:.0f} m." if r else "With this channel model the signal stays above the floor."
+    return (f"Every radio transmits at {tx_power_dbm(cfg):.1f} dBm. Dropout: a link carries no frames once its signal is below "
+            f"{floor:.0f} dBm (receiver floor).\n{reach}")
+
+
 def floor_dbm(cfg):
     return float(cfg["network"]["wifi"].get("phy", {}).get("preamble_detection_min_rssi_dbm", -82.0))
 
@@ -205,13 +229,15 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
             mid = (xy[i] + xy[j]) / 2
             dx, dy = xy[j] - xy[i]
             mid = mid + 0.5 * rad * np.array([dy, -dx])           # midpoint of the quadratic arc matplotlib draws
-            ax.text(mid[0], mid[1], f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4,
-                    color="#202124", bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=colour, lw=0.9, alpha=0.92))
+            ax.text(mid[0], mid[1], f"{rssi:.0f} DROPPED" if dead else f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4,
+                    color="#b00020" if dead else "#202124",
+                    bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=colour, lw=0.9, alpha=0.92))
     for n, (x, y) in zip(names, xy):
         ax.scatter([x], [y], s=150 if n == leader else 90, marker="*" if n == leader else "o", c="#1a73e8" if n == leader else "#3c4043",
                    edgecolors="white", linewidths=1.2, zorder=5)
-        ax.annotate(n + (" (leader)" if n == leader else ""), (x, y), textcoords="offset points", xytext=(9, 7),
-                    fontsize=8.5, fontweight="bold", color="#202124", zorder=6)
+        ax.annotate(n + (" (leader)" if n == leader else "") + f"   Tx {tx_power_dbm(cfg):.0f} dBm", (x, y), textcoords="offset points",
+                    xytext=(10, 7), fontsize=8, fontweight="bold", color="#202124", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.75))
     pts = [xy]
     if tracks:                                           # keep the whole trace in view, not just the current positions
         pts += [ps[ts <= t][:, :2] for ts, ps in (tracks[n] for n in names if n in tracks) if (ts <= t).any()]
@@ -280,13 +306,14 @@ def live(a, cfg, names, norm, floor):
     pairs = PairLog(os.path.join(a.log_dir, "ns3", "pair_rssi.csv"))
     fallback = static_positions(cfg)
     fig = plt.figure(figsize=(8.2, 7.2))
-    ax = fig.add_axes([0.08, 0.14, 0.72, 0.72])
-    cax = fig.add_axes([0.84, 0.14, 0.02, 0.72])
+    ax = fig.add_axes([0.08, 0.17, 0.72, 0.69])
+    cax = fig.add_axes([0.84, 0.17, 0.02, 0.69])
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=CMAP), cax=cax)
-    cb.set_label("received signal strength (dBm)")
+    cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
     fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"), Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"below receiver floor ({floor:.0f} dBm)")],
+                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"dropout: below {floor:.0f} dBm, no frames")],
                loc="lower center", ncol=3, frameon=False, fontsize=8.5)
+    fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043", wrap=True)
     title = fig.suptitle(f"Live inter-agent signal strength: {cfg['experiment']['name']}", fontsize=11)
     try:
         fig.canvas.manager.set_window_title("Inter-agent communications")
@@ -364,17 +391,18 @@ def main():
         sample = pairs.at(t) if pairs and pairs.available() else {}
         from_ns3 &= draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, a.curved, make_rssi_of(cfg, sample))
     sm = plt.cm.ScalarMappable(norm=norm, cmap=CMAP)
-    fig.subplots_adjust(left=0.10 / n ** 0.5, right=0.87, bottom=0.14, top=0.88, wspace=0.28)
-    cax = fig.add_axes([0.895, 0.14, 0.014, 0.74])
+    fig.subplots_adjust(left=0.10 / n ** 0.5, right=0.87, bottom=0.17, top=0.88, wspace=0.28)
+    cax = fig.add_axes([0.895, 0.17, 0.014, 0.71])
     cb = fig.colorbar(sm, cax=cax)
-    cb.set_label("received signal strength (dBm)")
+    cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
     cb.ax.axhline(floor, color="#202124", lw=1.0) if lo < floor < hi else None
     fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"),
                         Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"below receiver floor ({floor:.0f} dBm): no link")],
+                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"dropout: below {floor:.0f} dBm, no frames")],
                loc="lower center", ncol=3, frameon=False, fontsize=8.5)
+    fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043")
     fig.suptitle(f"Inter-agent signal strength: {cfg['experiment']['name']}   ({len(names)} agents, {len(names) * (len(names) - 1) // 2} links; "
-                 f"numbers are dBm)\n" + source_label(from_ns3), fontsize=11)
+                 f"link labels are dBm)\n" + source_label(from_ns3), fontsize=11)
     out = a.out or os.path.join(a.log_dir or ".", "comm_map.png")
     fig.savefig(out, dpi=150)
     print(f"plot_comm_map: wrote {out}")

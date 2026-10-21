@@ -19,7 +19,7 @@ demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-prompt]  
 ```
 
 The simulation runs in the containers; two windows open on the host: the **Gazebo GUI**, attached to the simulator container, and a **live 2D map**
-(`tools/plot_comm_map.py --live`) that redraws about twice a second from what ns-3 is logging, with every agent pair coloured dark green (strong) to red (weak). The signal of each pair is read from
+(`tools/plot_comm_map.py --live`) that redraws about twice a second from what ns-3 is logging, with every agent pair coloured dark green (strong) to red (weak); dropped links are dashed and labelled "DROPPED", and the figure shows each radio's transmit power and where the signal reaches the dropout floor. The signal of each pair is read from
 ns-3 itself (`ns3/pair_rssi.csv`: the scenario evaluates its own propagation loss chain for every ordered pair on the current node positions), so it follows any
 change of layout, agent count, transmit power or loss model in the YAML without touching the tool.
 The script starts the stack and holds the vehicles on the ground, opens the windows and frames an overview camera, and flies when you press Enter

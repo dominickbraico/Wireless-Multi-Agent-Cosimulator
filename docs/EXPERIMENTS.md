@@ -33,7 +33,7 @@ Outputs in the log directory:
 |---|---|
 | `formation_report.json` | All numbers, per follower |
 | `formation.png` | Paths and per-follower formation error |
-| `comm_map.png` | 2D map of every agent pair's signal strength at mid-flight, dark green (strong) to red (weak) ([tools/plot_comm_map.py](../tools/plot_comm_map.py)); the values come from `ns3/pair_rssi.csv` |
+| `comm_map.png` | 2D map of every agent pair's signal strength at mid-flight, dark green (strong) to red (weak) ([tools/plot_comm_map.py](../tools/plot_comm_map.py)); the values come from `ns3/pair_rssi.csv`; dropped links (below the receiver floor) are dashed and labelled, and the transmit power and the distance at which the signal reaches the floor are printed on the figure; derivation in [SIGNAL_MODEL.md](SIGNAL_MODEL.md) |
 | `ns3/pair_rssi.csv` | Signal strength of every ordered agent pair every `network.link_log_interval_s`: `t_s,tx,rx,distance_m,rssi_dbm,below_floor`. Evaluated by ns-3 on its channel loss chain at the current node positions, so it exists for pairs that never talk |
 | `link_vs_distance.png` | Swarm latency and loss against mean distance to the leader (more than one follower) |
 | `swarm_follower_<agent>.csv` | Per-message sequence number, latency and gap for that follower |
