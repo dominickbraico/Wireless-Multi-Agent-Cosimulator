@@ -52,6 +52,7 @@ demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a li
 | [docs/CONTAINERS.md](docs/CONTAINERS.md) | Docker deployment, container networking, the physics-simulator container, adding Isaac Sim, changing the network technology |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, emulation path, DDS domains, swarm protocol, limitations |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | The experiment YAML, agents, roles, positions |
+| [docs/SIGNAL_MODEL.md](docs/SIGNAL_MODEL.md) | How the map's signal strength is calculated: equation, parameters, defaults, origin, limitations |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | Tests, outputs, pass criteria, reference results |
 | [ns3/patches/README.md](ns3/patches/README.md) | The local ns-3 patch |
 

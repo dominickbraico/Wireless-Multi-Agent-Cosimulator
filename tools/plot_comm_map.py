@@ -25,7 +25,7 @@ gets one line, dark green for a strong signal fading through yellow and orange t
 receiver floor (preamble_detection_min_rssi_dbm) is not met, so no frame between that pair is detected at all.
 
 The signal strength is the received power the configured propagation model gives at the plotted instant: tx power minus
-the chained propagation losses, evaluated exactly as ns-3 does (LogDistance: no loss within the reference distance, then
+the chained propagation losses, evaluated exactly as ns-3 does (LogDistance: the reference loss alone within the reference distance, then
 ref_loss + 10*exponent*log10(d/ref)). It uses the 3D distance between antennas. Run logs supply the positions
 (<log_dir>/ns3/pose_applied.csv, the poses ns-3 applied) and the experiment copy ns-3 saved next to them.
 
@@ -63,9 +63,10 @@ def rx_power_dbm(cfg, d):
     for m in cfg["network"]["channel"]["loss"]:
         if m["type"] != "LogDistance":
             raise SystemExit(f"plot_comm_map: loss model {m['type']} is not supported by this tool")
+        # ns-3 3.48 LogDistancePropagationLossModel::DoCalcRxPower: inside the reference distance only the reference loss applies
+        p -= m["ref_loss_db"]
         if d > m["ref_distance_m"]:
-            p += -m["ref_loss_db"] - 10.0 * m["exponent"] * math.log10(d / m["ref_distance_m"])
-        # at or inside the reference distance ns-3 returns the power unchanged
+            p -= 10.0 * m["exponent"] * math.log10(d / m["ref_distance_m"])
     return p
 
 
