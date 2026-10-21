@@ -101,7 +101,7 @@ These are single runs on one machine; they are not statistics.
   The arcs in `heading_sectors_deg` are the headings whose ground and objects stay below 5 m out to 46 m, found by reading heights from the world's mesh files (accuracy about 1 m, measured against the spawn height,
   not against Gazebo's collision geometry); no allowed cell was higher than 3.2 m. The plans flew without incident in the runs above; a different world needs its own check.
 - **Landing on the Baylands slope.** The ground near the triangle falls by a few tenths of a metre toward the east. In the Baylands roam runs the agent spawned at (5, 0) was bumped 0.6, 1.7 and 2.2 m after touchdown
-  (the vehicle was already disarmed), in three identical runs; the other three agents stayed within 0.2 m. This is simulator contact behaviour, not the control stack, and it is not repeatable.
+  (the vehicle was already disarmed), in three identical runs; the other three agents stayed within 0.2 m. This is simulator contact behaviour, not the control stack, and it is not repeatable. A later Baylands run with the GUI and the path markers had agent2 end 17.18 m from its spawn point (the 5.0 m after-touchdown bound failed; it was within 0.08 m when landing began). Two repeat runs, one with and one without markers, passed all 33 checks. The markers are GUI-only, so no link to them is expected, but with single runs it is not ruled out.
 - **Constant altitude, flat reference.** Flight altitude is constant per agent and distances assume the same flat reference as the rest of the framework.
 - **Shutdown artefact.** When the harness stops ns-3 after the last landing every link "drops"; the analyzer ignores events after the last agent has landed.
 

@@ -56,7 +56,7 @@ terminal dashboard and `demo/cleanup.sh [--config YAML]` stops leftover processe
 The demo flies every agent in the config. Its overview camera and the dashboard are laid out for the two-agent config: with more agents,
 move the camera in the GUI; the dashboard shows only `agent1` and `agent2`.
 
-`demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-prompt]` is the same demo on the Docker deployment ([CONTAINERS.md](CONTAINERS.md)), without sudo,
+`demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--no-prompt]` is the same demo on the Docker deployment ([CONTAINERS.md](CONTAINERS.md)), without sudo,
 and adds a live 2D map of every agent pair's signal strength next to the Gazebo GUI. It has the same camera framing; its dashboard is the map window rather than `demo/monitor.py`.
 
 ## Reference results
