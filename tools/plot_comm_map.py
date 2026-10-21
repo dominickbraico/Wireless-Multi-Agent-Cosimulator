@@ -263,8 +263,7 @@ def live(a, cfg, names, norm, floor):
     cax = fig.add_axes([0.84, 0.16, 0.02, 0.70])
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=CMAP), cax=cax)
     cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
-    fig.text(0.5, 0.04, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043", wrap=True)
-    title = fig.suptitle(f"Live inter-agent signal strength: {cfg['experiment']['name']}", fontsize=11)
+    # no title or caption in the live window (it is recorded next to the Gazebo GUI); the saved figures keep theirs
     try:
         fig.canvas.manager.set_window_title("Inter-agent communications")
     except Exception:
@@ -275,9 +274,8 @@ def live(a, cfg, names, norm, floor):
         pairs.poll()
         pos = {n: tail.latest.get(n, fallback[n]) for n in names}
         ax.clear()
-        from_ns3 = draw_panel(ax, cfg, names, pos, tail.tracks() or None, tail.t if tail.latest else None, norm, floor, a.curved,
-                              make_rssi_of(cfg, pairs.at()))
-        title.set_text(f"Live inter-agent signal strength: {cfg['experiment']['name']}\n" + source_label(from_ns3 and pairs.available()))
+        draw_panel(ax, cfg, names, pos, tail.tracks() or None, tail.t if tail.latest else None, norm, floor, a.curved,
+                   make_rssi_of(cfg, pairs.at()))
         if not tail.latest:
             ax.set_title("waiting for poses from ns-3 ...", fontsize=10)
         return []

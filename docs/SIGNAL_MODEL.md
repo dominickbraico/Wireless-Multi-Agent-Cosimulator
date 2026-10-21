@@ -91,7 +91,7 @@ separate (retries, backoff, rate adaptation); it reacts to the missing acknowled
 With the default configuration -50 dBm is reached at 4.4 m, so dark green appears only when two agents are within about 4 m; agents 8 to 32 m apart appear yellow to orange-red.
 `--rssi-range LO HI` changes the scale; this is a display choice and does not change the simulation.
 
-The figure also states the transmit power (in the caption and next to each agent's name) and the dropout rule. A pair whose signal is below the floor has **no line**:
+The figure also states the transmit power (in the saved figures' caption and next to each agent's name) and the dropout rule. A pair whose signal is below the floor has **no line**:
 the map shows only links that can carry frames. The caption gives the distance at which the signal reaches the floor, found by solving the same chain of loss models
 numerically (`dropout_range_m()` in `tools/plot_comm_map.py`); for the default configuration it prints 51 m, matching the closed form in section 5. The data in
 `pair_rssi.csv` keeps every pair, with `below_floor` = 1 for the ones the map leaves out.
