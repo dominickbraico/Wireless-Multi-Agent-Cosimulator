@@ -106,7 +106,12 @@ else
 fi
 touch "$OUT/go"
 if [ "$SCEN" = mesh_dropout ]; then
-  say "Flying: take-off, the wanderer flies its seeded random path and an excursion that drops links, then returns to its spawn point (about 2 to 3 min)"
+  MMODE="$(python3 -c "import yaml,sys; print(((yaml.safe_load(open(sys.argv[1])).get('scenario') or {}).get('mesh_dropout') or {}).get('mode', 'roam'))" "$CFG")"
+  if [ "$MMODE" = roam ]; then
+    say "Flying: take-off, then every agent flies its own seeded random path (links drop out and recover as they move apart and together) and returns to its spawn point (about 2 min)"
+  else
+    say "Flying: take-off, the wanderer flies its seeded random path and an excursion that drops links, then returns to its spawn point (about 2 to 3 min)"
+  fi
 else
   say "Flying: take-off, the leader flies a ${SIDE} m square, the followers track it over the emulated link (about 90 s)"
 fi

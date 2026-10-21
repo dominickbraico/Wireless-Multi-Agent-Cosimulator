@@ -16,7 +16,9 @@ x0, x1, y0, y1 = min(xs), max(xs) + side, min(ys), max(ys) + side     # the squa
 if (cfg.get("scenario") or {}).get("type") == "mesh_dropout":         # frame the whole planned path instead (the square does not exist)
     sys.path.insert(0, __file__.rsplit("/demo/", 1)[0] + "/orchestrator")
     import mesh_plan
-    pts = [(a["spawn_pose"][0], a["spawn_pose"][1]) for a in cfg["agents"]] + [tuple(p) for w in mesh_plan.plan(cfg)["wanderers"].values() for p in w["waypoints_enu"]]
+    pl = mesh_plan.plan(cfg)
+    fliers = pl["agents"] if pl["mode"] == "roam" else pl["wanderers"]
+    pts = [(a["spawn_pose"][0], a["spawn_pose"][1]) for a in cfg["agents"]] + [tuple(p) for w in fliers.values() for p in w["waypoints_enu"]]
     x0, x1, y0, y1 = min(p[0] for p in pts) - 8, max(p[0] for p in pts) + 8, min(p[1] for p in pts) - 8, max(p[1] for p in pts) + 8
 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
 ex, ey = x1 - x0, y1 - y0

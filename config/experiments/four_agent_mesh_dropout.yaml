@@ -54,23 +54,34 @@ agents:
   - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [0.0, 8.66, 0.3, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1]}
   - {name: agent4, radio_ip: 10.10.0.4, mgmt_ip: 10.20.0.14, px4_instance: 3, px4_gz_model: x500_3, spawn_pose: [0.0, 2.89, 0.3, 0], tap: tap-a4, bridge: br-a4, antenna_offset: [0, 0, 0.1]}
 # Scenario: instead of the leader-follower flight, the agents run the mesh-dropout demonstration (docs/MESH_DROPOUT.md). Every key is optional;
-# the values shown are the defaults except `seed` and the comments. The plan is a pure function of this section, so a run can be repeated.
+# the values shown are the defaults except `seed`. The plan is a pure function of this section, so a run can be repeated exactly.
 scenario:
   type: mesh_dropout
   mesh_dropout:
-    seed: 7                    # random waypoints and the excursion are drawn from this seed
-    wanderers: [agent4]        # these fly; every other agent hovers at its spawn point
+    mode: roam                 # roam: EVERY agent flies a seeded random path | excursion: one wanderer flies, the others hover
+    seed: 7                    # all random draws come from this seed
     altitude_base_m: 8.0       # agent i (position in the agents list) flies at base + i * step metres above its arming point
     altitude_step_m: 3.0
     speed_mps: 3.0
+    heartbeat_hz: 5.0          # every agent broadcasts its state on the radio at this rate
+    link_timeout_s: 1.5        # a neighbour not heard for this long counts as LOST
+    margin_m: 3.0              # distances are judged against D (where the signal reaches the receiver floor) plus or minus this margin
+    # mode roam:
+    arena_radius_m: 40.0       # waypoints are drawn within this radius of the centre of the spawn points
+    max_dropped_links: 2       # a plan is kept only if never more than this many links are at risk (distance > D - margin) at once ...
+    min_drop_events: 2         # ... and at least this many links clearly drop (distance > D + margin for min_drop_s)
+    min_drop_s: 6.0
+    min_flight_s: 70.0         # each agent's path lasts at least this long; all agents land together at the end
+    end_hold_s: 5.0
+    tracking_lag_s: 1.0        # how late a vehicle follows its setpoint (the planner predicts link states from lagged positions)
+    # mode excursion:
+    wanderers: [agent4]        # these fly; every other agent hovers at its spawn point
     random_waypoints: 3        # random points before the excursion, and again after it
     roam_radius_m: 20.0        # ... drawn inside this radius around the wanderer's spawn (all links stay up there)
     excursion_links: [1, 2]    # the excursion drops this many anchor links (one value drawn from the seed)
-    margin_m: 3.0              # dropped anchors end > D+margin away, kept anchors < D-margin (D = distance where the signal reaches the floor)
     dwell_s: 10.0              # hover time at the excursion point
     heading_deg: null          # fixed excursion heading (ENU, 0 = east, 90 = north); default drawn from the seed
-    heartbeat_hz: 5.0          # every agent broadcasts its state on the radio at this rate
-    link_timeout_s: 1.5        # a neighbour not heard for this long counts as LOST
+    heading_sectors_deg: null  # or a list of [from, to] arcs (ENU degrees from the centre of the spawn points) the flights are restricted to; used for Baylands
 swarm:
   qos:
     peer_state:                # the heartbeat topic /mesh/peer_state (see docs/CONFIGURATION.md, "Swarm message QoS")
