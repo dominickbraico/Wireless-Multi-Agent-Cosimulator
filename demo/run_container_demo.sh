@@ -5,7 +5,7 @@
 #   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-prompt]
 #
 #   --config Y   experiment YAML (default: config/experiments/five_agent_wifi.yaml)
-#   --world N    Gazebo world (default: from the YAML; only worlds without downloads work in containers)
+#   --world N    Gazebo world (default: from the YAML; Fuel models, e.g. baylands, are downloaded once into a host cache, see docs/CONTAINERS.md)
 #   --no-gui     do not open the Gazebo GUI           --no-map  do not open the live map
 #   --no-prompt  start the flight after a 5 s countdown instead of waiting for Enter
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host

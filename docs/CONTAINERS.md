@@ -204,6 +204,44 @@ Notes: the radio firewall allows only the swarm DDS UDP ports, which stays corre
 that cannot carry multicast or large frames will change how the swarm DDS domain behaves; the tests report that. `ns3/patches/0001-...` is specific to
 Wi-Fi devices.
 
+## Worlds, including custom ones and worlds that download models
+
+A world is `worlds/<name>.sdf`. The file name must equal the `<world name="...">` inside it (the pose topic and the health check use
+that name). Select it with `simulator.px4_world_name` in the YAML or `--world <name>` / `PX4_WORLD=<name>`. `worlds/` is mounted into the
+simulator container, so a new world needs no image rebuild.
+
+Models the world uses can come from three places:
+
+| Source | How it works |
+|---|---|
+| PX4's Gazebo models (`x500`, ...) | Baked into the simulator image at build time. |
+| Your own models | Put them in `worlds/models/<model name>/` (with `model.config` and `model.sdf`) and refer to them as `model://<model name>`. That directory is on the simulator's resource path. |
+| Gazebo Fuel (a world whose `<uri>` is `https://fuel.gazebosim.org/...`, such as `baylands`) | The stack has no internet, so the models are downloaded once into a cache on the host and mounted read-only into the simulator at `~/.gz/fuel`. |
+
+Fuel models are handled automatically. `cosim.py up` checks whether the cache holds the models for the chosen world; if not, it starts a
+throw-away container with internet access, loads the world once (so models that other models depend on are fetched too) and records a
+marker that is tied to the hash of the `.sdf`. You can do this ahead of time with `python3 orchestrator/cosim.py fetch-world baylands`
+(or `python3 orchestrator/fuel.py status baylands` to see what is cached).
+
+- Cache location: `$COSIM_FUEL_CACHE`, default `~/.cache/cosim/fuel`. It is owned by you, not root. `baylands` takes about 410 MB.
+- `COSIM_NO_FETCH=1` forbids downloading and makes `up` fail with the command to run instead (offline or locked-down runs).
+- Each run writes `fuel_models.txt` in its log directory with the world file's hash and the cached version of each model it names. Fuel serves
+  the latest version for a URI that names none, so a cache filled later can differ from an earlier one. The list covers the models the
+  world names directly, not the ones those models depend on.
+- Editing the `.sdf` invalidates the marker, and the next `up` fetches again.
+
+Baylands needs a config with matching spawn heights, because its terrain rises with y:
+
+```
+demo/run_container_demo.sh --config config/experiments/five_agent_wifi_baylands.yaml --world baylands
+PX4_WORLD=baylands tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi_baylands.yaml
+```
+
+Tested (2026-10-21, single runs): `baylands` with the five-agent Baylands config, headless, offline simulator container: all checks passed
+(formation error p95 1.90 to 1.94 m, swarm loss 0 %, ns-3 lag max 0.148 ms, RTF worst 5-s window 0.993). A world with a model in
+`worlds/models/` loaded and showed that model in `gz model --list`; no flight was run on it. The host Gazebo GUI loads Fuel meshes from the host's own
+`~/.gz/fuel`, which downloads them on the host if absent.
+
 ## Operations
 
 - `python3 orchestrator/cosim.py build [service...]` builds the images (`docker compose build` on a generated project). First build: ns-3 compiles (a few
@@ -218,8 +256,7 @@ Wi-Fi devices.
 ## Limitations
 
 - The Gazebo GUI is not inside the stack (the containers are headless); `demo/run_container_demo.sh` attaches the host's GUI to it (see above).
-- The `baylands` world is not supported in containers: its terrain is downloaded from Gazebo Fuel at first use and the networks are internal (no internet).
-  `px4_flat` is the default.
+- Worlds that reference Fuel models need a one-time download on the host (see "Worlds"); the default world, `px4_flat`, needs none.
 - PX4's Gazebo models are fetched from the `PX4-gazebo-models` repository's main branch when the simulator image is built; they are not pinned.
 - Containers run as root and keep `NET_ADMIN` (needed to wire the interfaces; the simulator container uses it for one multicast route).
 - The host's Docker bridge for each link network also receives the frames on that link. The source-MAC guard keeps host-originated frames (IPv6 neighbour

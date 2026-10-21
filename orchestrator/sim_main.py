@@ -23,7 +23,7 @@ def main():
     world = os.environ.get("COSIM_WORLD") or sim["world"](cfg)
     supervise.install_handlers()
     env = dict(os.environ, PATH="/usr/bin:" + os.environ["PATH"], GZ_CONFIG_PATH="/usr/share/gz",
-               GZ_SIM_RESOURCE_PATH="/opt/simulation-gazebo/models:/opt/simulation-gazebo/worlds",
+               GZ_SIM_RESOURCE_PATH="/opt/simulation-gazebo/models:/opt/simulation-gazebo/worlds:/opt/cosim/worlds/models",
                GZ_SIM_SERVER_CONFIG_PATH="/opt/simulation-gazebo/server.config")
     os.makedirs(f"{LOGS}/bridge", exist_ok=True)
     for name, argv in sim["processes"](cfg, world, config, LOGS):

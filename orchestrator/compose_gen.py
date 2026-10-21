@@ -22,6 +22,7 @@ import os
 import yaml
 
 import containers
+import fuel
 import simulators
 import technologies
 
@@ -52,6 +53,7 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
     sim = simulators.get(cfg)
     world = sim["world"](cfg, world)
 
+    os.makedirs(fuel.cache_dir(), exist_ok=True)       # bind-mount source; created here so Docker does not create it as root
     cdir = os.path.join(os.path.abspath(out), "compose")
     os.makedirs(cdir, exist_ok=True)
     rcfg = run_config(cfg, plan, mode, firewall, world)
@@ -77,7 +79,8 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "networks": {mgmt_net: {"ipv4_address": plan["mgmt"]["sim_ip"]}},
             "cap_add": s["cap_add"],
             "environment": {**s["environment"], "COSIM_CONFIG": "/config/experiment_run.yaml"},
-            "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro"],
+            "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro",
+                                     f"{fuel.cache_dir()}:/root/.gz/fuel:ro"],      # Fuel models for worlds that use them (fuel.py)
             "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": 60},
             "stop_grace_period": "10s",
         }
