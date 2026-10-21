@@ -51,7 +51,8 @@ GZPART="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['
 echo "logs: $OUT   (host reaches the simulator from $GWIP, gz partition $GZPART)"
 
 say "Starting the containers: simulator, ns-3 and one per agent (about 1 to 3 min)"
-WAIT_FOR_GUI=1 OUT="$OUT" SIDE="$SIDE" ALT="$ALT" SPEED="$SPEED" ${WORLD:+PX4_WORLD="$WORLD"} \
+# PX4_WORLD empty means the YAML's world (the test script only passes --world when it is non-empty)
+WAIT_FOR_GUI=1 OUT="$OUT" SIDE="$SIDE" ALT="$ALT" SPEED="$SPEED" PX4_WORLD="$WORLD" \
   "$ROOT/tests/containers_leader_follower.sh" --config "$CFG" > "$OUT/test.out" 2>&1 &
 TESTPID=$!
 for i in $(seq 1 400); do grep -q "waiting on the ground" "$OUT/test.out" 2>/dev/null && break
