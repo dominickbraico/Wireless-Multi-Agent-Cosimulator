@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
-"""Flight plan of the mesh-dropout scenario: seeded random waypoints plus one excursion that is guaranteed to drop 1 or 2 links.
+"""Flight plans of the mesh-dropout scenario: seeded random flights that make links between agents drop and recover.
 
     mesh_plan.py <experiment.yaml> [--out plan.json]      print (and optionally save) the plan the YAML produces
 
-Purpose: show links dropping and recovering between agents (docs/MESH_DROPOUT.md). One or more agents (`wanderers`) fly; the others
-(`anchors`) hover at their spawn points. The plan is a pure function of the YAML (including the seed), so every agent container computes
-the same plan and a run can be repeated exactly.
+The plan is a pure function of the YAML (including the seed), so every agent container computes the same plan and a run can be repeated exactly.
+Two modes (`scenario.mesh_dropout.mode`):
 
-Wanderer path, in order:
-  1. `random_waypoints` random points inside `roam_radius_m` of its spawn. Every anchor is farther than `margin_m` inside the dropout range
-     there, so no link drops during this phase.
-  2. An outbound point just outside the roaming area on the excursion heading, then the EXCURSION target: a point where exactly k anchors are more than `margin_m` beyond the dropout range D and all the other anchors are
-     more than `margin_m` inside it (k drawn from `excursion_links`). The wanderer hovers there `dwell_s` seconds. This is what drops k links.
-  3. The outbound point again, `random_waypoints` more random points (links recover), then home (its spawn point), then it lands.
-The excursion heading is drawn from the seed over the whole circle, from `heading_sectors_deg` arcs when given (use it to keep the excursion clear of terrain or
-obstacles in a world), or fixed with `heading_deg`. D is the distance at which the YAML's own signal model reaches the receiver floor (orchestrator/linkmodel.py), taken in 3-D because the agents
-fly at different altitudes (each agent i flies at altitude_base_m + i * altitude_step_m above its arming point, so paths cannot collide).
+mode: roam (default)  EVERY agent flies. Each draws its own seeded random waypoints inside `arena_radius_m` of the centre of the spawn points, flies them
+  at `speed_mps` and returns to its spawn point; all agents start together (a shared start signal after take-off) and stop together. Because everyone
+  moves, whether a link is up depends on where both ends are at that moment, so the planner simulates the whole flight (a vehicle follows its
+  setpoint about `tracking_lag_s` late) and keeps a plan only if (1) never more than `max_dropped_links` links are at risk at once (a link is at risk
+  when its distance exceeds D - margin_m), and (2) at least `min_drop_events` links clearly drop (distance above D + margin_m for at least `min_drop_s`).
+  Candidate plans are drawn from the seed until one qualifies. Distinct altitudes keep paths apart.
 
-Modelling notes: the margin has to cover the wanderer's tracking error (a vehicle lags its setpoint by roughly speed x 1 s while moving; it is
-stationary during the dwell). Ground is assumed flat for the altitude arithmetic, as elsewhere. Waypoints are ENU world metres.
+mode: excursion  ONE wanderer (or more) flies, the others hover at their spawn points (the anchors). The wanderer flies random points where every link is up,
+  an excursion point where exactly k anchor links (k = 1 or 2) end beyond the dropout range, then back and home. See the previous behaviour in docs/MESH_DROPOUT.md.
+
+D is the distance at which the YAML's own signal model reaches the receiver floor (orchestrator/linkmodel.py), taken in 3-D because the agents fly at different
+altitudes (agent i flies at altitude_base_m + i * altitude_step_m above its arming point). `heading_sectors_deg` restricts where the flights may go: in roam mode
+waypoints (and the straight legs between them) beyond `roam_radius_m + 3` m of the centre must lie in these polar arcs (ENU degrees, 0 = east, 90 = north); in excursion mode the
+excursion heading is drawn from them.
+
+Modelling notes: the margin has to cover the tracking error (about speed x tracking_lag_s while moving). Ground is assumed flat for the altitude arithmetic, as elsewhere.
+Waypoints are ENU world metres.
 """
 import argparse
 import json
@@ -31,7 +35,16 @@ import yaml
 import linkmodel
 
 DEFAULTS = {
+    "mode": "roam",               # roam: every agent flies | excursion: one wanderer, the rest hover
     "seed": 1,
+    "arena_radius_m": 40.0,       # roam: waypoints are drawn within this radius of the centre of the spawn points
+    "max_dropped_links": 2,       # roam: never more than this many links at risk of being down at once
+    "min_drop_events": 2,         # roam: at least this many clear drops (distance > D + margin for min_drop_s)
+    "min_drop_s": 6.0,
+    "min_flight_s": 70.0,         # roam: each agent's path is at least this long (seconds at speed_mps)
+    "end_hold_s": 5.0,            # roam: everyone hovers at home this long before landing
+    "tracking_lag_s": 1.0,        # roam: how late a vehicle follows its setpoint (measured: about 1 s)
+    "max_attempts": 50000,        # roam: candidate plans tried before giving up
     "wanderers": None,            # default: the last agent in the YAML
     "altitude_base_m": 8.0,
     "altitude_step_m": 3.0,
@@ -57,16 +70,22 @@ def settings(cfg):
         raise ValueError(f"scenario.mesh_dropout: unknown keys {sorted(unknown)}")
     s.update(given)
     names = [a["name"] for a in cfg["agents"]]
-    if s["wanderers"] is None:
-        s["wanderers"] = [names[-1]]
-    bad = [w for w in s["wanderers"] if w not in names]
-    if bad:
-        raise ValueError(f"scenario.mesh_dropout.wanderers: unknown agents {bad}")
-    if len(s["wanderers"]) >= len(names):
-        raise ValueError("at least one agent must stay behind as an anchor")
-    if not s["excursion_links"] or any(int(k) < 1 or int(k) > len(names) - len(s["wanderers"]) for k in s["excursion_links"]):
-        raise ValueError(f"excursion_links {s['excursion_links']} must be between 1 and the number of anchors ({len(names) - len(s['wanderers'])})")
-    for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s"):
+    if s["mode"] not in ("roam", "excursion"):
+        raise ValueError(f"scenario.mesh_dropout.mode must be roam or excursion, got {s['mode']!r}")
+    if s["mode"] == "excursion":
+        if s["wanderers"] is None:
+            s["wanderers"] = [names[-1]]
+        bad = [w for w in s["wanderers"] if w not in names]
+        if bad:
+            raise ValueError(f"scenario.mesh_dropout.wanderers: unknown agents {bad}")
+        if len(s["wanderers"]) >= len(names):
+            raise ValueError("mode excursion: at least one agent must stay behind as an anchor (use mode roam to move every agent)")
+        if not s["excursion_links"] or any(int(k) < 1 or int(k) > len(names) - len(s["wanderers"]) for k in s["excursion_links"]):
+            raise ValueError(f"excursion_links {s['excursion_links']} must be between 1 and the number of anchors ({len(names) - len(s['wanderers'])})")
+    else:
+        if int(s["max_dropped_links"]) < 1 or int(s["min_drop_events"]) < 1:
+            raise ValueError("max_dropped_links and min_drop_events must be at least 1")
+    for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s"):
         if not (isinstance(s[k], (int, float)) and s[k] > 0):
             raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
     arcs = s["heading_sectors_deg"]
@@ -81,8 +100,7 @@ def _d3(p, q):
     return math.dist(p, q)
 
 
-def plan(cfg):
-    s = settings(cfg)
+def _plan_excursion(cfg, s):
     agents = cfg["agents"]
     index = {a["name"]: i for i, a in enumerate(agents)}
     spawn = {a["name"]: [float(v) for v in a["spawn_pose"][:3]] for a in agents}
@@ -94,7 +112,7 @@ def plan(cfg):
         raise ValueError("the configured signal never reaches the receiver floor: there is no dropout to demonstrate")
     margin = float(s["margin_m"])
     rng = random.Random(int(s["seed"]))
-    out = {"seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s,
+    out = {"mode": "excursion", "seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s,
            "altitude_m": alt, "spawn": {n: spawn[n] for n in index}, "anchors": anchors, "wanderers": {}}
 
     for w in s["wanderers"]:
@@ -164,6 +182,116 @@ def plan(cfg):
                                "excursion": target, "path_length_m": round(length, 1),
                                "expected_flight_s": round(length / s["speed_mps"] + sum(dwell.values()), 1)}
     return out
+
+
+def _plan_roam(cfg, s):
+    agents = cfg["agents"]
+    names = [a["name"] for a in agents]
+    spawn = {a["name"]: [float(v) for v in a["spawn_pose"][:3]] for a in agents}
+    alt = {n: s["altitude_base_m"] + s["altitude_step_m"] * i for i, n in enumerate(names)}
+    D = linkmodel.dropout_range_m(cfg)
+    if D is None:
+        raise ValueError("the configured signal never reaches the receiver floor: there is no dropout to demonstrate")
+    margin, speed, lag = float(s["margin_m"]), float(s["speed_mps"]), float(s["tracking_lag_s"])
+    rng = random.Random(int(s["seed"]))
+    centre = (sum(spawn[n][0] for n in names) / len(names), sum(spawn[n][1] for n in names) / len(names))
+    inner, outer = float(s["roam_radius_m"]) + 3.0, float(s["arena_radius_m"])
+    arcs = s["heading_sectors_deg"]
+
+    def allowed(p):
+        r = math.hypot(p[0] - centre[0], p[1] - centre[1])
+        if r <= inner:
+            return True
+        if r > outer:
+            return False
+        if not arcs:
+            return True
+        th = math.degrees(math.atan2(p[1] - centre[1], p[0] - centre[0])) % 360
+        return any((th - lo) % 360 <= ((hi - lo) % 360 or 360) for lo, hi in arcs)
+
+    def leg_ok(a, b):                                   # the whole straight leg must stay where flying is allowed
+        n = max(1, int(math.dist(a, b)))
+        return all(allowed((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n)) for i in range(n + 1))
+
+    def draw_point():
+        for _ in range(10000):
+            r, th = outer * math.sqrt(rng.random()), rng.uniform(0, 2 * math.pi)
+            p = (round(centre[0] + r * math.cos(th), 2), round(centre[1] + r * math.sin(th), 2))
+            if allowed(p):
+                return p
+        raise ValueError("arena_radius_m / heading_sectors_deg leave no place to fly")
+
+    def draw_path(home):
+        for _ in range(1000):
+            pts, length = [home], 0.0
+            while True:
+                p = draw_point()
+                if not leg_ok(pts[-1], p):
+                    continue
+                pts.append(p); length += math.dist(pts[-2], p)
+                back = math.dist(p, home)
+                if (length + back) / speed >= s["min_flight_s"] and leg_ok(p, home):
+                    pts.append(home)
+                    times = [0.0]
+                    for u, v in zip(pts, pts[1:]):
+                        times.append(times[-1] + math.dist(u, v) / speed)
+                    return pts, times
+                if len(pts) > 40:
+                    break
+        raise ValueError("could not draw a flight path of min_flight_s inside the allowed area")
+
+    def at(path, t):                                    # setpoint position at time t (clamped), linear along the legs
+        pts, times = path
+        if t <= 0:
+            return pts[0]
+        if t >= times[-1]:
+            return pts[-1]
+        i = max(j for j in range(len(times)) if times[j] <= t)
+        f = (t - times[i]) / (times[i + 1] - times[i])
+        return (pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1]))
+
+    def evaluate(paths, t_total, dt=0.25):
+        pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
+        runs = {p: None for p in pairs}
+        events, peak, max_risk = [], {p: 0.0 for p in pairs}, 0
+        t = 0.0
+        while t <= t_total + 1e-9:
+            xy = {n: at(paths[n], t - lag) for n in names}
+            risk = 0
+            for a, b in pairs:
+                d = math.dist((xy[a][0], xy[a][1], spawn[a][2] + alt[a]), (xy[b][0], xy[b][1], spawn[b][2] + alt[b]))
+                risk += d > D - margin
+                if d > D + margin:
+                    runs[(a, b)] = (runs[(a, b)] or [t, 0.0])
+                    peak[(a, b)] = max(peak[(a, b)], d)
+                elif runs[(a, b)] is not None:
+                    t0 = runs[(a, b)][0]
+                    if t - t0 >= s["min_drop_s"]:
+                        events.append({"pair": [a, b], "t_start_s": round(t0, 2), "t_end_s": round(t, 2), "peak_distance_m": round(peak[(a, b)], 1)})
+                    runs[(a, b)] = None; peak[(a, b)] = 0.0
+            max_risk = max(max_risk, risk)
+            t += dt
+        return max_risk, sorted(events, key=lambda e: e["t_start_s"])
+
+    for attempt in range(1, int(s["max_attempts"]) + 1):
+        paths = {n: draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2))) for n in names}
+        t_total = max(p[1][-1] for p in paths.values()) + float(s["end_hold_s"])
+        max_risk, events = evaluate(paths, t_total)
+        if max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"]):
+            break
+    else:
+        raise ValueError(f"no plan with at most {s['max_dropped_links']} links at risk and {s['min_drop_events']} clear drops in {s['max_attempts']} attempts; "
+                         "try a larger arena_radius_m, fewer min_drop_events or a smaller margin_m")
+    return {"mode": "roam", "seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s, "altitude_m": alt,
+            "spawn": {n: spawn[n] for n in names}, "centre": [centre[0], centre[1]], "attempts": attempt,
+            "t_total_s": round(t_total, 2), "max_links_at_risk": max_risk, "nominal_events": events,
+            "agents": {n: {"waypoints_enu": [list(p) for p in paths[n][0]], "times_s": [round(t, 2) for t in paths[n][1]],
+                           "path_length_m": round(sum(math.dist(u, v) for u, v in zip(paths[n][0], paths[n][0][1:])), 1)} for n in names}}
+
+
+def plan(cfg):
+    s = settings(cfg)
+    return _plan_roam(cfg, s) if s["mode"] == "roam" else _plan_excursion(cfg, s)
 
 
 def main():
