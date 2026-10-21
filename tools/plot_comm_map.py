@@ -17,6 +17,7 @@ without that log (older runs, or --config alone) fall back to the same LogDistan
 says which source it used. Positions come from <log_dir>/ns3/pose_applied.csv and the experiment copy ns-3 saved next to it.
 
 --time T       ns-3 time (s) of the snapshot (default: middle of the airborne period, or of the whole run)
+--times T...   several snapshot times, one panel each
 --snapshots N  N panels evenly spread over the airborne period instead of one
 --rssi-range   dBm mapped to red and to dark green (default: the receiver floor of the YAML, and -50 dBm)
 --live         open a window and redraw about twice a second from the poses ns-3 is applying right now; follows a run that
@@ -42,34 +43,8 @@ from matplotlib.patches import FancyArrowPatch
 CMAP = LinearSegmentedColormap.from_list("signal", ["#c40000", "#e8590c", "#f2c500", "#74b816", "#0b5d1e"])
 DEFAULT_STRONG_DBM = -50.0
 
-
-def rx_power_dbm(cfg, d):
-    """Received power at distance d (m) after the configured chain of LogDistance losses, as ns-3 computes it."""
-    p = float(cfg["network"]["wifi"]["tx_power_dbm"])
-    for m in cfg["network"]["channel"]["loss"]:
-        if m["type"] != "LogDistance":
-            raise SystemExit(f"plot_comm_map: loss model {m['type']} is not supported by this tool")
-        # ns-3 3.48 LogDistancePropagationLossModel::DoCalcRxPower: inside the reference distance only the reference loss applies
-        p -= m["ref_loss_db"]
-        if d > m["ref_distance_m"]:
-            p -= 10.0 * m["exponent"] * math.log10(d / m["ref_distance_m"])
-    return p
-
-
-def tx_power_dbm(cfg):
-    return float(cfg["network"]["wifi"]["tx_power_dbm"])
-
-
-def dropout_range_m(cfg, floor):
-    """Distance (m) at which the modelled signal falls to the dropout floor, by bisection over the same chain of losses
-    (received power only decreases with distance for LogDistance). None if it does not reach the floor within 100 km."""
-    lo, hi = 1e-3, 1e5
-    if rx_power_dbm(cfg, hi) >= floor:
-        return None
-    for _ in range(80):
-        mid = (lo * hi) ** 0.5
-        lo, hi = (mid, hi) if rx_power_dbm(cfg, mid) >= floor else (lo, mid)
-    return hi
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "orchestrator"))
+from linkmodel import dropout_range_m, floor_dbm, rx_power_dbm, tx_power_dbm   # the same signal model the planner uses
 
 
 def info_text(cfg, floor):
@@ -78,10 +53,6 @@ def info_text(cfg, floor):
     reach = f"With this channel model the signal reaches the floor at about {r:.0f} m." if r else "With this channel model the signal stays above the floor."
     return (f"Every radio transmits at {tx_power_dbm(cfg):.1f} dBm. Below {floor:.0f} dBm (receiver floor) a link carries no frames "
             f"and no line is drawn.\n{reach}")
-
-
-def floor_dbm(cfg):
-    return float(cfg["network"]["wifi"].get("phy", {}).get("preamble_detection_min_rssi_dbm", -82.0))
 
 
 def static_positions(cfg):
@@ -321,6 +292,7 @@ def main():
     ap.add_argument("log_dir", nargs="?")
     ap.add_argument("--config")
     ap.add_argument("--time", type=float)
+    ap.add_argument("--times", type=float, nargs="+", help="several ns-3 times (s), one panel each")
     ap.add_argument("--snapshots", type=int)
     ap.add_argument("--out")
     ap.add_argument("--rssi-range", nargs=2, type=float, metavar=("LO", "HI"))
@@ -352,7 +324,7 @@ def main():
 
     if tracks:
         t0, t1 = airborne_window(tracks)
-        times = [a.time] if a.time is not None else (
+        times = list(a.times) if a.times else [a.time] if a.time is not None else (
             [t0 + (t1 - t0) * (k + 0.5) / a.snapshots for k in range(a.snapshots)] if a.snapshots else [(t0 + t1) / 2])
         # an agent that never got a pose keeps its YAML position
         fallback = static_positions(cfg)
