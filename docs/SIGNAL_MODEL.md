@@ -74,9 +74,9 @@ The YAML writes the receiver values out explicitly so they are visible and chang
 values being ns-3 defaults means the numbers describe ns-3's default radio, not a particular device. Calibrating them needs measurements of the target
 hardware (RSSI versus distance gives `L0` and `n`; receiver datasheet or measurement gives the PHY values).
 
-## 5. Link detectability (the dashed lines)
+## 5. Link detectability (pairs with no line)
 
-The map flags a pair as below the floor when `P_rx < preamble_detection_min_rssi_dbm` (-82 dBm by default). That is a **PHY** mechanism: the receiver's
+The map draws no line for a pair that is below the floor, that is when `P_rx < preamble_detection_min_rssi_dbm` (-82 dBm by default). That is a **PHY** mechanism: the receiver's
 `ThresholdPreambleDetectionModel` never detects a frame weaker than that, whatever else is true, and also needs SNR of at least 4 dB. The MAC layer is
 separate (retries, backoff, rate adaptation); it reacts to the missing acknowledgement.
 
@@ -91,9 +91,10 @@ separate (retries, backoff, rate adaptation); it reacts to the missing acknowled
 With the default configuration -50 dBm is reached at 4.4 m, so dark green appears only when two agents are within about 4 m; agents 8 to 32 m apart appear yellow to orange-red.
 `--rssi-range LO HI` changes the scale; this is a display choice and does not change the simulation.
 
-The figure also states the transmit power (in the caption and next to each agent's name) and the dropout rule. A line whose signal is below the floor is
-dashed and its label reads "DROPPED". The caption gives the distance at which the signal reaches the floor, found by solving the same chain of loss models
-numerically (`dropout_range_m()` in `tools/plot_comm_map.py`); for the default configuration it prints 51 m, matching the closed form in section 5.
+The figure also states the transmit power (in the caption and next to each agent's name) and the dropout rule. A pair whose signal is below the floor has **no line**:
+the map shows only links that can carry frames. The caption gives the distance at which the signal reaches the floor, found by solving the same chain of loss models
+numerically (`dropout_range_m()` in `tools/plot_comm_map.py`); for the default configuration it prints 51 m, matching the closed form in section 5. The data in
+`pair_rssi.csv` keeps every pair, with `below_floor` = 1 for the ones the map leaves out.
 
 ## 7. Assumptions and limitations
 

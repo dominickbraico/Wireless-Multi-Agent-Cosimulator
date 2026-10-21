@@ -5,9 +5,9 @@
   tools/plot_comm_map.py --config <experiment.yaml> [...]          static positions from the YAML (no run needed)
   tools/plot_comm_map.py <log_dir> --live                          live window that follows a running experiment
 
-Agents are drawn top-down (x east, y north) at their ns-3 positions, with the path flown so far as a faint trace. Every pair
-gets one line, dark green for a strong signal fading through yellow and orange to red as it weakens. A dashed line means the
-receiver floor (preamble_detection_min_rssi_dbm) is not met, so no frame between that pair is detected at all.
+Agents are drawn top-down (x east, y north) at their ns-3 positions, with the path flown so far as a faint trace. A pair
+whose signal is at or above the receiver floor (preamble_detection_min_rssi_dbm) gets one line, dark green for a strong signal fading
+through yellow and orange to red as it weakens. A pair below the floor gets NO line: no frame between them is detected at all.
 
 The signal strength is read from ns-3: the scenario evaluates its own channel loss chain for every ordered pair of agents on the
 current node positions and logs it (<log_dir>/ns3/pair_rssi.csv: t_s, tx, rx, distance_m, rssi_dbm, below_floor, every
@@ -15,19 +15,6 @@ network.link_log_interval_s). It is the power a frame from tx would arrive with 
 talks, and it follows any change of topology or loss model. If the two directions of a pair differ, the weaker one is drawn. Runs
 without that log (older runs, or --config alone) fall back to the same LogDistance formula computed here from the YAML; the figure
 says which source it used. Positions come from <log_dir>/ns3/pose_applied.csv and the experiment copy ns-3 saved next to it.
-
---time T | --snapshots N] [--out PNG] [--rssi-range LO HI] [--curved auto|always|never]
-  tools/plot_comm_map.py --config <experiment.yaml> [...]          static positions from the YAML (no run needed)
-  tools/plot_comm_map.py <log_dir> --live                          live window that follows a running experiment
-
-Agents are drawn top-down (x east, y north) at their ns-3 positions, with the path flown so far as a faint trace. Every pair
-gets one line, dark green for a strong signal fading through yellow and orange to red as it weakens. A dashed line means the
-receiver floor (preamble_detection_min_rssi_dbm) is not met, so no frame between that pair is detected at all.
-
-The signal strength is the received power the configured propagation model gives at the plotted instant: tx power minus
-the chained propagation losses, evaluated exactly as ns-3 does (LogDistance: the reference loss alone within the reference distance, then
-ref_loss + 10*exponent*log10(d/ref)). It uses the 3D distance between antennas. Run logs supply the positions
-(<log_dir>/ns3/pose_applied.csv, the poses ns-3 applied) and the experiment copy ns-3 saved next to them.
 
 --time T       ns-3 time (s) of the snapshot (default: middle of the airborne period, or of the whole run)
 --snapshots N  N panels evenly spread over the airborne period instead of one
@@ -90,8 +77,8 @@ def info_text(cfg, floor):
     """Two lines for the figure: what every radio transmits with, where a link drops out, and how far that is."""
     r = dropout_range_m(cfg, floor)
     reach = f"With this channel model the signal reaches the floor at about {r:.0f} m." if r else "With this channel model the signal stays above the floor."
-    return (f"Every radio transmits at {tx_power_dbm(cfg):.1f} dBm. Dropout: a link carries no frames once its signal is below "
-            f"{floor:.0f} dBm (receiver floor).\n{reach}")
+    return (f"Every radio transmits at {tx_power_dbm(cfg):.1f} dBm. Below {floor:.0f} dBm (receiver floor) a link carries no frames "
+            f"and no line is drawn.\n{reach}")
 
 
 def floor_dbm(cfg):
@@ -220,17 +207,17 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
         d = float(np.linalg.norm(np.array(pos[a]) - np.array(pos[b])))
         rssi, from_ns3 = rssi_of(a, b, d)
         used_ns3 = used_ns3 and from_ns3
-        dead = rssi < floor
+        if rssi < floor:
+            continue                                      # below the receiver floor: no frame is detected, so there is no link to draw
         colour = CMAP(norm(rssi))
         rad = (0.16 * (j - i) * (1 if (i + j) % 2 == 0 else -1)) if use_arcs else 0.0
         ax.add_patch(FancyArrowPatch(xy[i], xy[j], arrowstyle="-", connectionstyle=f"arc3,rad={rad}",
-                                     color=colour, lw=2.4, ls=(0, (4, 3)) if dead else "-", alpha=0.95, zorder=2))
+                                     color=colour, lw=2.4, alpha=0.95, zorder=2))
         if label_links:
             mid = (xy[i] + xy[j]) / 2
             dx, dy = xy[j] - xy[i]
             mid = mid + 0.5 * rad * np.array([dy, -dx])           # midpoint of the quadratic arc matplotlib draws
-            ax.text(mid[0], mid[1], f"{rssi:.0f} DROPPED" if dead else f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4,
-                    color="#b00020" if dead else "#202124",
+            ax.text(mid[0], mid[1], f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4, color="#202124",
                     bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=colour, lw=0.9, alpha=0.92))
     for n, (x, y) in zip(names, xy):
         ax.scatter([x], [y], s=150 if n == leader else 90, marker="*" if n == leader else "o", c="#1a73e8" if n == leader else "#3c4043",
@@ -311,7 +298,7 @@ def live(a, cfg, names, norm, floor):
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=CMAP), cax=cax)
     cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
     fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"), Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"dropout: below {floor:.0f} dBm, no frames")],
+                        Line2D([], [], color="none", label="no line = below the floor: no link")],
                loc="lower center", ncol=3, frameon=False, fontsize=8.5)
     fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043", wrap=True)
     title = fig.suptitle(f"Live inter-agent signal strength: {cfg['experiment']['name']}", fontsize=11)
@@ -398,10 +385,10 @@ def main():
     cb.ax.axhline(floor, color="#202124", lw=1.0) if lo < floor < hi else None
     fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"),
                         Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, ls=(0, (4, 3)), label=f"dropout: below {floor:.0f} dBm, no frames")],
+                        Line2D([], [], color="none", label="no line = below the floor: no link")],
                loc="lower center", ncol=3, frameon=False, fontsize=8.5)
     fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043")
-    fig.suptitle(f"Inter-agent signal strength: {cfg['experiment']['name']}   ({len(names)} agents, {len(names) * (len(names) - 1) // 2} links; "
+    fig.suptitle(f"Inter-agent signal strength: {cfg['experiment']['name']}   ({len(names)} agents; "
                  f"link labels are dBm)\n" + source_label(from_ns3), fontsize=11)
     out = a.out or os.path.join(a.log_dir or ".", "comm_map.png")
     fig.savefig(out, dpi=150)
