@@ -36,7 +36,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from matplotlib.colors import LinearSegmentedColormap, Normalize
-from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch
 
 # dark green (strong) -> green -> yellow -> orange -> red (weak)
@@ -192,13 +191,6 @@ def make_rssi_of(cfg, sample):
 
 def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, label_links=True):
     xy = np.array([pos[n][:2] for n in names])
-    leader = names[0]
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "orchestrator"))
-        from fleet import resolve
-        leader = resolve(cfg)[0]["name"]
-    except Exception:
-        pass
     if tracks:
         for n in names:
             if n in tracks:
@@ -224,9 +216,8 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
             ax.text(mid[0], mid[1], f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4, color="#202124",
                     bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=colour, lw=0.9, alpha=0.92))
     for n, (x, y) in zip(names, xy):
-        ax.scatter([x], [y], s=150 if n == leader else 90, marker="*" if n == leader else "o", c="#1a73e8" if n == leader else "#3c4043",
-                   edgecolors="white", linewidths=1.2, zorder=5)
-        ax.annotate(n + (" (leader)" if n == leader else "") + f"   Tx {tx_power_dbm(cfg):.0f} dBm", (x, y), textcoords="offset points",
+        ax.scatter([x], [y], s=90, marker="o", c="#3c4043", edgecolors="white", linewidths=1.2, zorder=5)
+        ax.annotate(f"{n}   Tx {tx_power_dbm(cfg):.0f} dBm", (x, y), textcoords="offset points",
                     xytext=(10, 7), fontsize=8, fontweight="bold", color="#202124", zorder=6,
                     bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.75))
     pts = [xy]
@@ -297,14 +288,11 @@ def live(a, cfg, names, norm, floor):
     pairs = PairLog(os.path.join(a.log_dir, "ns3", "pair_rssi.csv"))
     fallback = static_positions(cfg)
     fig = plt.figure(figsize=(8.2, 7.2))
-    ax = fig.add_axes([0.08, 0.17, 0.72, 0.69])
-    cax = fig.add_axes([0.84, 0.17, 0.02, 0.69])
+    ax = fig.add_axes([0.08, 0.16, 0.72, 0.70])
+    cax = fig.add_axes([0.84, 0.16, 0.02, 0.70])
     cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=CMAP), cax=cax)
     cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
-    fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"), Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([], [], color="none", label="no line = below the floor: no link")],
-               loc="lower center", ncol=3, frameon=False, fontsize=8.5)
-    fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043", wrap=True)
+    fig.text(0.5, 0.04, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043", wrap=True)
     title = fig.suptitle(f"Live inter-agent signal strength: {cfg['experiment']['name']}", fontsize=11)
     try:
         fig.canvas.manager.set_window_title("Inter-agent communications")
@@ -382,16 +370,12 @@ def main():
         sample = pairs.at(t) if pairs and pairs.available() else {}
         from_ns3 &= draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, a.curved, make_rssi_of(cfg, sample))
     sm = plt.cm.ScalarMappable(norm=norm, cmap=CMAP)
-    fig.subplots_adjust(left=0.10 / n ** 0.5, right=0.87, bottom=0.17, top=0.88, wspace=0.28)
-    cax = fig.add_axes([0.895, 0.17, 0.014, 0.71])
+    fig.subplots_adjust(left=0.10 / n ** 0.5, right=0.87, bottom=0.16, top=0.88, wspace=0.28)
+    cax = fig.add_axes([0.895, 0.16, 0.014, 0.72])
     cb = fig.colorbar(sm, cax=cax)
     cb.set_label(f"received signal strength (dBm); bottom = dropout floor {floor:.0f} dBm")
     cb.ax.axhline(floor, color="#202124", lw=1.0) if lo < floor < hi else None
-    fig.legend(handles=[Line2D([0], [0], color=CMAP(0.95), lw=2.4, label="strong"),
-                        Line2D([0], [0], color=CMAP(0.0), lw=2.4, label="weak"),
-                        Line2D([], [], color="none", label="no line = below the floor: no link")],
-               loc="lower center", ncol=3, frameon=False, fontsize=8.5)
-    fig.text(0.5, 0.075, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043")
+    fig.text(0.5, 0.04, info_text(cfg, floor), ha="center", va="center", fontsize=7.5, color="#3c4043")
     fig.suptitle(f"Inter-agent signal strength: {cfg['experiment']['name']}   ({len(names)} agents; "
                  f"link labels are dBm)\n" + source_label(from_ns3), fontsize=11)
     out = a.out or os.path.join(a.log_dir or ".", "comm_map.png")
