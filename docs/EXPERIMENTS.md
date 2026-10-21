@@ -44,7 +44,7 @@ Outputs in the log directory:
 Pass criteria: every vehicle reaches altitude; the leader lands; each follower holds its formation (horizontal error p95 at most
 5 m while the leader moves, a threshold fixed before the first run), receives the stream with less than 5 % sequence loss and
 lands when the link goes away; no domain-0, XRCE or PX4-topic traffic and only domain-42 traffic on the channel; ns-3 lag within
-`max_lag_ms`; Gazebo real-time factor within `min_rtf`. Formation error is measured against Gazebo ground truth.
+`max_lag_ms`; Gazebo real-time factor within `min_rtf` (see ARCHITECTURE.md, "Run validity", for the window). Formation error is measured against Gazebo ground truth.
 
 ## Demo with the Gazebo GUI
 

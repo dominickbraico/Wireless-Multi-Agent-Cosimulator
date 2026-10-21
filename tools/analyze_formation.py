@@ -159,10 +159,23 @@ except FileNotFoundError:
     check("ns-3 summary.json written (clean shutdown)", False)
 rt = [(float(r["t_wall_s"]), float(r["rtf"])) for r in csv.DictReader(open(f"{log}/bridge/rtf.csv"))]
 if rt and L:
-    rc = rtf_check(rt, L[0][0] + 5, L[-1][0], cfg["time"]["min_rtf"], cfg["time"].get("rtf_window_s", 5.0))
-    check(f"Gazebo RTF {cfg['time'].get('rtf_window_s', 5.0):g}-s sliding mean >= {cfg['time']['min_rtf']}", rc["ok"],
+    # The measured window is the experiment: from the go signal (take-off) to the end of the poses. Before it the vehicles sit on
+    # the ground, and one-off stalls there (a Gazebo GUI attaching and receiving the scene, a client joining gz-transport) cannot
+    # affect the result. Without a go file (native runs) the window starts 5 s after the first pose, as before.
+    rtf_win, rtf_min = cfg["time"].get("rtf_window_s", 5.0), cfg["time"]["min_rtf"]
+    t_pose0 = L[0][0] + 5
+    go = f"{log}/go"
+    t_flight = max(t_pose0, os.path.getmtime(go)) if os.path.exists(go) else t_pose0
+    rc = rtf_check(rt, t_flight, L[-1][0], rtf_min, rtf_win)
+    check(f"Gazebo RTF {rtf_win:g}-s sliding mean >= {rtf_min}", rc["ok"],
           f"worst window mean {rc['worst_window_mean']:.3f}, worst sample {rc['worst_sample']:.2f}" if rc["n"] else "no samples")
     report["rtf_worst_window_mean"] = rc["worst_window_mean"]
+    if t_flight > t_pose0:                              # also report the pre-flight part, which is not part of the criterion
+        pre = rtf_check(rt, t_pose0, L[-1][0], rtf_min, rtf_win)
+        if pre["n"] and not pre["ok"]:
+            print(f"note  RTF over the whole run incl. {t_flight - t_pose0:.0f} s on the ground before take-off: worst window mean "
+                  f"{pre['worst_window_mean']:.3f}, worst sample {pre['worst_sample']:.2f} (not part of the criterion)")
+        report["rtf_worst_window_mean_incl_preflight"] = pre["worst_window_mean"]
 
 json.dump(report, open(f"{log}/formation_report.json", "w"), indent=1)
 

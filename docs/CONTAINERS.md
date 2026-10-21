@@ -29,9 +29,9 @@ The script starts the stack and holds the vehicles on the ground, opens the wind
 How the GUI reaches the container: the host's `gz` joins the `cosim` Gazebo partition from the Docker bridge's gateway address on `mgmt` (`10.20.0.254` by default,
 `mgmt.gateway` in `containers.py`). The agents' management firewall ignores it (only the simulator is allowed), and the GUI is not part of the experiment.
 
-Known effect: attaching the GUI makes the simulator pause briefly while it sends the scene. That happens before take-off, but a pause of about 0.3 s is enough to pull
-the strict 5-second real-time-factor window under 0.95, so the RTF line of the end-of-run report can read FAIL in a GUI run. The other checks cover the flight. The demo
-prints a note when that happens; the headless `tests/containers_leader_follower.sh` is the strict validity run.
+Known effect: attaching the GUI makes the simulator pause briefly (about 0.4 s in the runs below) while it sends the scene. That happens on the ground before
+take-off. The real-time-factor check therefore measures from the `go` signal (take-off) to the end of the poses; the whole-run figure, including the pause, is
+printed as a `note` line but is not part of the criterion (see `docs/EXPERIMENTS.md`, "Run validity"). A pause or slowdown *during* the flight still fails the check.
 
 ## Containers
 
@@ -216,14 +216,16 @@ Models the world uses can come from three places:
 |---|---|
 | PX4's Gazebo models (`x500`, ...) | Baked into the simulator image at build time. |
 | Your own models | Put them in `worlds/models/<model name>/` (with `model.config` and `model.sdf`) and refer to them as `model://<model name>`. That directory is on the simulator's resource path. |
-| Gazebo Fuel (a world whose `<uri>` is `https://fuel.gazebosim.org/...`, such as `baylands`) | The stack has no internet, so the models are downloaded once into a cache on the host and mounted read-only into the simulator at `~/.gz/fuel`. |
+| Gazebo Fuel (a world whose `<uri>` is `https://fuel.gazebosim.org/...`, such as `baylands`) | The stack has no internet, so the models are downloaded once into Gazebo's own cache on the host, `~/.gz/fuel`, which is mounted read-only into the simulator at the same absolute path. |
 
 Fuel models are handled automatically. `cosim.py up` checks whether the cache holds the models for the chosen world; if not, it starts a
 throw-away container with internet access, loads the world once (so models that other models depend on are fetched too) and records a
 marker that is tied to the hash of the `.sdf`. You can do this ahead of time with `python3 orchestrator/cosim.py fetch-world baylands`
 (or `python3 orchestrator/fuel.py status baylands` to see what is cached).
 
-- Cache location: `$COSIM_FUEL_CACHE`, default `~/.cache/cosim/fuel`. It is owned by you, not root. `baylands` takes about 410 MB.
+- Cache location: `~/.gz/fuel`, the cache native Gazebo uses, owned by you. The simulator container mounts it at the same absolute path and runs with your
+  `HOME`. This matters for the GUI: the server tells a connected GUI the absolute file paths of the meshes and textures it resolved, so those paths must exist on the host
+  too. With the cache inside the container as `/root/.gz/fuel` the host GUI crashed on `Permission denied` (observed 2026-10-21). `baylands` takes about 410 MB.
 - `COSIM_NO_FETCH=1` forbids downloading and makes `up` fail with the command to run instead (offline or locked-down runs).
 - Each run writes `fuel_models.txt` in its log directory with the world file's hash and the cached version of each model it names. Fuel serves
   the latest version for a URI that names none, so a cache filled later can differ from an earlier one. The list covers the models the
@@ -237,10 +239,11 @@ demo/run_container_demo.sh --config config/experiments/five_agent_wifi_baylands.
 PX4_WORLD=baylands tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi_baylands.yaml
 ```
 
-Tested (2026-10-21, single runs): `baylands` with the five-agent Baylands config, headless, offline simulator container: all checks passed
-(formation error p95 1.90 to 1.94 m, swarm loss 0 %, ns-3 lag max 0.148 ms, RTF worst 5-s window 0.993). A world with a model in
-`worlds/models/` loaded and showed that model in `gz model --list`; no flight was run on it. The host Gazebo GUI loads Fuel meshes from the host's own
-`~/.gz/fuel`, which downloads them on the host if absent.
+Tested (2026-10-21, single runs, `five_agent_wifi_baylands.yaml`, offline simulator container): headless, all checks passed (formation error p95 1.90 to 1.94 m,
+swarm loss 0 %, ns-3 lag max 0.148 ms, RTF worst 5-s window 0.993). With the host Gazebo GUI and the live map attached (`demo/run_container_demo.sh` as above,
+three runs after the path fix), 25 of 25 checks passed in each (RTF worst window 0.981 to 0.998); the GUI listed `park`, `coast_waves` and `x500_0` to `x500_4` and the map
+updated during the flight (screenshot taken mid-flight). The GUI's 3-D view was not inspected for texture quality. A world with a model in `worlds/models/` loaded and showed
+that model in `gz model --list`; no flight was run on it.
 
 ## Operations
 

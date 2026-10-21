@@ -103,11 +103,13 @@ wait $TESTPID; RC=$?
 TESTPID=""
 say "Finished. Checks:"
 grep -E "^(PASS|FAIL)|formation error|swarm link" "$OUT/test.out" | cut -c1-170
-if [ $GUI = 1 ] && grep -q "^FAIL  Gazebo RTF" "$OUT/test.out"; then
-  echo; echo "Note on the RTF line: attaching the Gazebo GUI makes the simulator pause for a moment while it sends the scene. That pause is before take-off and can pull"
-  echo "the strict 5-s sliding mean under the threshold; the other checks cover the flight. Sim times where the real-time factor dipped under 0.5 (attach was at the"
-  echo "stall nearest your GUI start; take-off is after Enter):  $(awk -F, 'NR>1 && $3<0.5 {printf "%d ", $2}' "$OUT/bridge/rtf.csv")"
-  echo "A strict validity run is the headless one:  tests/containers_leader_follower.sh --config $CFG"
+grep -h "^note  RTF" "$OUT/test.out" | cut -c1-230
+if grep -q "^note  RTF" "$OUT/test.out"; then
+  echo "(Attaching the Gazebo GUI makes the simulator pause for a moment while it sends the scene. That happens on the ground before take-off, so the check"
+  echo " measures the real-time factor from take-off on; the whole-run figure above is reported for transparency. Real-time factor = simulated time / wall time.)"
+fi
+if grep -q "^FAIL  Gazebo RTF" "$OUT/test.out"; then
+  echo "The real-time factor fell under the threshold DURING the flight (not the GUI attach). Dips under 0.5 at sim times: $(awk -F, 'NR>1 && $3<0.5 {printf "%d ", $2}' "$OUT/bridge/rtf.csv")"
 fi
 echo; echo "Final map: $OUT/comm_map.png     plots: $OUT/formation.png     all logs: $OUT"
 if [ $PROMPT = 1 ] && { [ -n "$GUIPID" ] || [ -n "$MAPPID" ]; }; then

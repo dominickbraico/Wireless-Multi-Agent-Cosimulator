@@ -105,9 +105,13 @@ def load_tracks(log_dir, cfg):
     rows = {n: ([], []) for n in names}
     with open(path) as f:
         for r in csv.DictReader(f):
-            n = names[int(r["node"])]                       # ns-3 node i is the i-th agent of the YAML
-            rows[n][0].append(float(r["t_ns3_s"]))
-            rows[n][1].append([float(r["x"]), float(r["y"]), float(r["z"])])
+            try:
+                n = names[int(r["node"])]                   # ns-3 node i is the i-th agent of the YAML
+                t, xyz = float(r["t_ns3_s"]), [float(r["x"]), float(r["y"]), float(r["z"])]
+            except (TypeError, ValueError, IndexError):
+                continue                                    # a run still in progress: the last line may be half written
+            rows[n][0].append(t)
+            rows[n][1].append(xyz)
     rows = {n: (np.array(t), np.array(p)) for n, (t, p) in rows.items() if t}
     return rows or None
 
@@ -350,7 +354,7 @@ def main():
     cfg_path = a.config or find_config(a.log_dir)
     cfg = yaml.safe_load(open(cfg_path))
     names = [x["name"] for x in cfg["agents"]]
-    tracks = load_tracks(a.log_dir, cfg) if a.log_dir else None
+    tracks = load_tracks(a.log_dir, cfg) if a.log_dir and not a.live else None     # the live view tails the file itself
     floor = floor_dbm(cfg)
     lo, hi = a.rssi_range if a.rssi_range else (floor, DEFAULT_STRONG_DBM)
     norm = Normalize(vmin=lo, vmax=hi, clip=True)

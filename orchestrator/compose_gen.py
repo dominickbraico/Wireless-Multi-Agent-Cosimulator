@@ -78,9 +78,10 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "build": {"context": ROOT, "dockerfile": sim["dockerfile"]},
             "networks": {mgmt_net: {"ipv4_address": plan["mgmt"]["sim_ip"]}},
             "cap_add": s["cap_add"],
-            "environment": {**s["environment"], "COSIM_CONFIG": "/config/experiment_run.yaml"},
+            "environment": {**s["environment"], "COSIM_CONFIG": "/config/experiment_run.yaml",
+                            "HOME": os.path.expanduser("~")},      # so Gazebo resolves Fuel models to the host's paths (fuel.py)
             "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro",
-                                     f"{fuel.cache_dir()}:/root/.gz/fuel:ro"],      # Fuel models for worlds that use them (fuel.py)
+                                     f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"],   # Fuel models, at the host's own path (fuel.py)
             "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": 60},
             "stop_grace_period": "10s",
         }

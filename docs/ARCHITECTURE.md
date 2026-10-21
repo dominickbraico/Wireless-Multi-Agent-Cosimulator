@@ -120,7 +120,11 @@ assumes the ground is at z = 0.
 
 Because the emulation is real-time, a run is only meaningful if the simulators keep up. Each run reports:
 - **ns-3 lag** (wall clock minus simulated time) against `time.max_lag_ms`.
-- **Gazebo real-time factor**, as a sliding mean over `time.rtf_window_s` against `time.min_rtf`. Single-sample dips are reported but not fatal.
+- **Gazebo real-time factor** (simulated time advanced per wall-clock second; the emulated radio runs on the wall clock, so a simulator that falls behind
+  feeds ns-3 positions that are late relative to the traffic), as a sliding mean over `time.rtf_window_s` against `time.min_rtf`. Single-sample dips are reported but not fatal.
+  The measured window starts at the `go` signal (take-off) when a run has one (container runs, and native runs that wait for the GUI), otherwise 5 s after the first applied
+  pose, and ends with the poses. Stalls before take-off, such as a Gazebo GUI attaching, are printed as a `note` and are not part of the criterion. This window definition was
+  changed on 2026-10-21 after a GUI-attach stall (0.4 s at RTF 0.04, on the ground) failed the previous definition; the threshold (`min_rtf`) was not changed.
 
 ## Limitations
 

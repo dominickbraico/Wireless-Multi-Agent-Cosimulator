@@ -10,7 +10,10 @@ persistent cache that the simulator container mounts at ~/.gz/fuel:
                               (including models that other models depend on), then record a marker.
     fuel.py fetch <world>     the same, from the command line
 
-Cache location: $COSIM_FUEL_CACHE, default ~/.cache/cosim/fuel. Set COSIM_NO_FETCH=1 to forbid downloads (offline runs).
+Cache location: Gazebo's own cache on the host, ~/.gz/fuel. The simulator container mounts it read-only at the SAME absolute path
+and runs with the host's HOME, because the server tells a connected GUI the absolute file paths of the meshes and textures it resolved:
+a host GUI can only open them if those paths exist on the host too (with the cache inside the container as /root/.gz/fuel the
+GUI crashed on 'Permission denied'). Set COSIM_NO_FETCH=1 to forbid downloads (offline runs).
 Reproducibility: Fuel serves the latest version of a model that a URI without a version names, so a fetch made later can
 differ from an earlier one. `describe()` records which versions were cached; cosim.py writes that to <log dir>/fuel_models.txt.
 """
@@ -23,12 +26,11 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 SIM_IMAGE = "cosim-sim-gazebo:latest"
-CACHE_ENV = "COSIM_FUEL_CACHE"
 URI_RE = re.compile(r"<uri>\s*(https?://[^<]+?)\s*</uri>")
 
 
 def cache_dir():
-    return os.path.abspath(os.path.expanduser(os.environ.get(CACHE_ENV, "~/.cache/cosim/fuel")))
+    return os.path.join(os.path.abspath(os.path.expanduser("~")), ".gz", "fuel")
 
 
 def world_path(world):
