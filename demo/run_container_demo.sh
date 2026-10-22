@@ -8,7 +8,7 @@
 #                e.g. --config config/experiments/four_agent_mesh_dropout_baylands.yaml (docs/MESH_DROPOUT.md)
 #   --world N    Gazebo world (default: from the YAML; Fuel models, e.g. baylands, are downloaded once into a host cache, see docs/CONTAINERS.md)
 #   --no-gui     do not open the Gazebo GUI           --no-map  do not open the live map
-#   --no-markers do not draw the red flown path in the Gazebo GUI (demo/path_markers.py); --show-plan also draws the planned paths, --halos a yellow halo on each vehicle
+#   --no-markers do not draw the red flown path and the red wireframe box on each vehicle in the Gazebo GUI (demo/path_markers.py); --show-plan also draws the planned paths, --halos a yellow halo on each vehicle
 #   --no-prompt  start the flight after a 5 s countdown instead of waiting for Enter
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host
 # (for the GUI) and python3 with matplotlib + Tk (for the map). No sudo.
@@ -100,7 +100,7 @@ if [ $GUI = 1 ]; then
     # (GUI-side markers only; demo/path_markers.py)
     if [ $MARKERS = 1 ]; then
       # a red line that grows behind each vehicle (stopped when the demo exits); --show-plan adds the planned paths
-      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" --trace "$OUT" ${SHOWPLAN:+--plan} ${HALOS:+--halos} > "$OUT/markers.log" 2>&1 &
+      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" --trace "$OUT" --boxes ${SHOWPLAN:+--plan} ${HALOS:+--halos} > "$OUT/markers.log" 2>&1 &
       MARKPID=$!; echo "drawing each vehicle's flown path in the GUI (red)"
     fi
   fi

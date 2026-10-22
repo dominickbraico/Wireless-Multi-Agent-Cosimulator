@@ -70,7 +70,8 @@ for seed in range(40):
     if max_risk > st["max_dropped_links"]: bad.append((seed, "too many links at risk", max_risk))
     if clear < st["min_drop_events"]: bad.append((seed, "too few clear drops", clear))
     c = pl["centre"]; inner, outer = st["roam_radius_m"] + 3.0, st["arena_radius_m"]; arcs = st.get("heading_sectors_deg")
-    def allowed(q):
+    xa = st.get("excursion_agent"); r_out = D + m + st.get("excursion_extra_m", 0.0)
+    def allowed(q, outer=outer):
         r = math.hypot(q[0] - c[0], q[1] - c[1])
         if r <= inner: return True
         if r > outer + 1e-6: return False
@@ -81,12 +82,18 @@ for seed in range(40):
         a = pl["agents"][n]; ws, ts = a["waypoints_enu"], a["times_s"]
         sp = [round(pl["spawn"][n][0], 2), round(pl["spawn"][n][1], 2)]
         if ws[0] != sp or ws[-1] != sp: bad.append((seed, n, "does not start and end at its spawn"))
-        if ts[-1] < st["min_flight_s"] - 1e-6: bad.append((seed, n, "path shorter than min_flight_s", ts[-1]))
+        if ts[-1] < st["min_flight_s"] - 1e-6 and n != xa: bad.append((seed, n, "path shorter than min_flight_s", ts[-1]))
         if pl["t_total_s"] < ts[-1] + st["end_hold_s"] - 1e-6: bad.append((seed, n, "end time too early"))
         for (u, v), (t0_, t1_) in zip(zip(ws, ws[1:]), zip(ts, ts[1:])):
-            if abs(math.dist(u, v) / (t1_ - t0_) - speed) > 0.05: bad.append((seed, n, "leg not at speed_mps")); break
+            hold = n == xa and math.dist(u, v) < 1e-9                      # the excursion agent waits at its excursion point
+            if not hold and abs(math.dist(u, v) / (t1_ - t0_) - speed) > 0.05: bad.append((seed, n, "leg not at speed_mps")); break
             k = max(1, int(math.dist(u, v)))
-            if not all(allowed((u[0] + (v[0] - u[0]) * i / k, u[1] + (v[1] - u[1]) * i / k)) for i in range(k + 1)): bad.append((seed, n, "leg leaves the allowed area", u, v)); break
+            lim = r_out + 1.0 if n == xa else outer
+            if not all(allowed((u[0] + (v[0] - u[0]) * i / k, u[1] + (v[1] - u[1]) * i / k), lim) for i in range(k + 1)): bad.append((seed, n, "leg leaves the allowed area", u, v)); break
+        if n == xa:
+            far = max(math.dist(w, c) for w in ws)
+            if abs(far - r_out) > 0.05: bad.append((seed, n, "excursion point not at D + margin + excursion_extra_m", far, r_out))
+            if max(ts[i + 1] - ts[i] for i in range(len(ts) - 1)) < st["min_isolation_s"]: bad.append((seed, n, "hold shorter than min_isolation_s"))
     if len(set(pl["altitude_m"].values())) != len(names): bad.append((seed, "altitudes not distinct"))
 check("re-simulated: at most max_dropped_links links at risk at once, at least min_drop_events clear drops, one agent fully isolated for min_isolation_s (when set), paths start/end at spawn, at speed, inside the allowed area", not bad, str(bad[:2]))
 check("planner needs few candidates", max(attempts) < 5000, f"max {max(attempts)} candidate plans over 40 seeds, median {sorted(attempts)[20]}; clear drops per plan {min(nev)}..{max(nev)}")
@@ -99,6 +106,7 @@ def set_tx(node, v):
         if k == "tx_power_dbm": node[k] = v
         elif isinstance(x, dict): set_tx(x, v)
 set_tx(base, 16.0); D = linkmodel.dropout_range_m(base)
+base.setdefault("scenario", {}).setdefault("mesh_dropout", {})["excursion_agent"] = None
 print("-- mode excursion")
 x1, x2 = mesh_plan.plan(variant("excursion", 7)), mesh_plan.plan(variant("excursion", 7))
 check("same seed gives an identical plan", x1 == x2)

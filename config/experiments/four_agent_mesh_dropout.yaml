@@ -19,7 +19,7 @@ network:
     rate_manager: ConstantRate
     data_mode: OfdmRate12Mbps
     control_mode: OfdmRate6Mbps
-    tx_power_dbm: 10.0         # reduced from 16 so that the 40 m arena can isolate one drone (range to the -82 dBm cutoff about 32 m)
+    tx_power_dbm: 4.0          # reduced from 16 so that one drone can be cut off from all others by a short trip (range to the -82 dBm cutoff about 20.5 m)
     error_rate_model: TableBased   # TableBased (ns-3 default for Yans) | Nist
     retry_limit: null              # null = ns-3 default (7 attempts)
     phy:                           # receiver parameters; defaults are ns-3's, all hardware-measurable
@@ -67,10 +67,12 @@ scenario:
     link_timeout_s: 1.5        # a neighbour not heard for this long counts as LOST
     margin_m: 3.0              # distances are judged against D (where the signal reaches the receiver floor) plus or minus this margin
     # mode roam:
-    arena_radius_m: 40.0       # waypoints are drawn within this radius of the centre of the spawn points
+    arena_radius_m: 8.0        # waypoints are drawn within this radius of the centre of the spawn points (all agents except excursion_agent; < D/2 so their links stay up)
     max_dropped_links: 3       # a plan is kept only if never more than this many links are at risk (distance > D - margin) at once (3 = all of one drone's links) ...
     min_drop_events: 2         # ... and at least this many links clearly drop (distance > D + margin for min_drop_s)
     min_drop_s: 6.0
+    excursion_agent: agent3    # this agent is the one cut off: out-and-back trip to just beyond range of everyone (D + margin_m + excursion_extra_m from the centre)
+    excursion_extra_m: 2.0
     min_isolation_s: 12.0      # and one drone must be beyond D + margin of ALL the others at once for this long (0 = not required)
     min_flight_s: 40.0         # each agent's path lasts at least this long; all agents land together at the end
     end_hold_s: 5.0

@@ -50,7 +50,7 @@ logs) and the usual ns-3 and flight logs.
 ## YAML (`scenario`, see also [CONFIGURATION.md](CONFIGURATION.md))
 
 `scenario.type: mesh_dropout` selects the stack; leader-follower remains the default when the key is absent. Keys under `scenario.mesh_dropout`, all optional, defaults in `orchestrator/mesh_plan.py`
-(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`,
+(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`, `excursion_agent`, `excursion_extra_m`, `excursion_pre_waypoints`,
 `min_drop_events`, `min_drop_s`, `min_flight_s`, `end_hold_s`, `tracking_lag_s`, `max_attempts`; excursion mode: `wanderers`, `random_waypoints`, `roam_radius_m`, `excursion_links`, `dwell_s`, `heading_deg`;
 both: `heading_sectors_deg`. The heartbeat QoS is `swarm.qos.peer_state` (default best_effort, volatile, **depth 10**). A plan that cannot be built is rejected with a message (unknown agent or mode, a margin no
 direction allows, no plan with the requested drops within `max_attempts`, ...).
@@ -89,20 +89,27 @@ retransmissions); that is an observation, not a tested explanation.
 point at the planned speed and stay inside the allowed area; excursions drop exactly *k* links with the margin.
 These are single runs on one machine; they are not statistics.
 
-### Full isolation of one drone (`min_isolation_s`, 2026-10-21)
+### Full isolation of one drone (`min_isolation_s`, `excursion_agent`; 2026-10-21)
 
-The shipped configs (`four_agent_mesh_dropout*.yaml`) now set `min_isolation_s: 12`: the planner also requires that at least one agent is beyond *D* + `margin_m` of **all** the
-others at once for that long (all three of its links down), and allows up to 3 links at risk (`max_dropped_links: 3`). To make that reachable inside the 40 m arena the shipped
-configs also lower the transmit power from 16 to 10 dBm, so *D* is 32.4 m instead of 51.4 m (same chain: 10 dBm - 46.68 dB - 30 log10(d) = -82 dBm). The noise floor was not changed:
-the cutoff is the -82 dBm preamble-detection threshold, which sits above noise + 4 dB (-90 dBm), so a lower noise floor would not add disconnections and a higher one would only
-matter above about -86 dBm. Excursion mode needs the larger range; run it with `tx_power_dbm: 16.0` (the offline test does).
+The shipped configs (`four_agent_mesh_dropout*.yaml`) make one drone, `excursion_agent: agent3`, lose every link at once. The planner requires it to be beyond *D* + `margin_m`
+of **all** the others for at least `min_isolation_s` (12 s) and allows up to 3 links at risk (`max_dropped_links: 3`). The other three agents roam only `arena_radius_m` = 8 m
+around the centre of the spawn points, which keeps their mutual links up (two agents at most 16 m apart in the plane, against *D* - margin = 17.5 m; the altitude offsets can add a
+little). The excursion agent flies `excursion_pre_waypoints` (2) random points inside that arena, then straight out to one point at *D* + `margin_m` + `excursion_extra_m` (2 m)
+from the centre in a seeded direction (inside `heading_sectors_deg` where those apply), holds there for `min_isolation_s` + 4 s, and flies home. A candidate plan is kept only if the
+independent simulation of everyone's lagged positions confirms the isolation. Its trip is therefore as short as the radio range allows: 25.5 m from the centre for seed 7.
+
+To keep the trip short the shipped configs lower the transmit power from 16 to 4 dBm, so *D* is 20.5 m instead of 51.4 m (same chain: 4 dBm - 46.68 dB - 30 log10(d) = -82 dBm).
+The noise floor was not changed: the cutoff is the -82 dBm preamble-detection threshold, which sits above noise + 4 dB (-90 dBm), so a lower noise floor would not add
+disconnections and a higher one would only matter above about -86 dBm. Excursion mode needs the larger range; run it with `tx_power_dbm: 16.0` and without `excursion_agent`
+(the offline test does).
 
 | Run | Config, command | Result |
 |---|---|---|
-| Single run, seed 7, 2026-10-21 | `four_agent_mesh_dropout_baylands.yaml`, `demo/run_container_demo.sh --config ... --no-prompt` (GUI, live map) | 36 of 36 checks; plan: agent3 isolated at plan t = 8-21 s (146 candidate plans); measured: agent3 had all three neighbours LOST at once for 14.2 s |
+| Single runs (two), seed 7, 2026-10-21 | `four_agent_mesh_dropout_baylands.yaml`, `demo/run_container_demo.sh --config ... --no-prompt` (GUI; one with the live map) | 36 of 36 checks each; plan: agent3 isolated at plan t = 14-27 s (109 candidate plans), 3 clear drops, peak pair distance 32 m, flight 48 s; measured: agent3 had all three neighbours LOST at once for 17.0 s and 17.5 s |
 
-Offline, `tests/mesh_plan.sh` re-simulates 40 seeds: every plan has an isolation of at least 12 s; the planner needed a median of 446 and at most 2157 candidate plans (single-run
-seed 7: 146 on Baylands). The flat config's plan was checked offline only, not flown in containers with these settings.
+Offline, `tests/mesh_plan.sh` re-simulates 40 seeds for both configs: every plan isolates a drone for at least 12 s, the excursion point is at the stated radius, and the planner needed
+a median of 75-81 and at most 324 candidate plans. Legs shorter than 3 m (the way home included) are rejected: the plan's times are rounded to 0.01 s, so a leg of about 1 m would have a
+speed error over 3 % and a few centimetres a zero duration. The flat config was not flown in containers with these settings.
 
 ## Choices and findings worth knowing
 

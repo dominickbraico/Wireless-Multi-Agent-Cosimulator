@@ -34,6 +34,8 @@ import yaml
 
 import linkmodel
 
+MIN_LEG_M = 3.0                   # roam: no shorter legs, the way home included (the plan's times are rounded to 0.01 s: a leg of a few cm would get a zero duration, one of about 1 m a speed error over 3 %)
+
 DEFAULTS = {
     "mode": "roam",               # roam: every agent flies | excursion: one wanderer, the rest hover
     "seed": 1,
@@ -41,6 +43,9 @@ DEFAULTS = {
     "max_dropped_links": 2,       # roam: never more than this many links at risk of being down at once
     "min_drop_events": 2,         # roam: at least this many clear drops (distance > D + margin for min_drop_s)
     "min_drop_s": 6.0,
+    "excursion_agent": None,      # roam: this agent (name) is the one cut off: it makes an out-and-back trip to just beyond range of everyone; the others roam arena_radius_m
+    "excursion_extra_m": 2.0,     #       the excursion point is D + margin_m + this far from the centre of the spawn points (smaller = shorter trip, fewer plans pass)
+    "excursion_pre_waypoints": 2, #       random waypoints the excursion agent flies (inside arena_radius_m) before going out
     "min_isolation_s": 0.0,       # roam: if > 0, at least one agent must have EVERY link below the floor (distance > D + margin to all others) this long;
                                   #       needs max_dropped_links >= number of agents - 1
     "min_flight_s": 70.0,         # roam: each agent's path is at least this long (seconds at speed_mps)
@@ -90,6 +95,11 @@ def settings(cfg):
     for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s"):
         if not (isinstance(s[k], (int, float)) and s[k] > 0):
             raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
+    if s["excursion_agent"] is not None:
+        if s["mode"] != "roam" or s["excursion_agent"] not in names or float(s["min_isolation_s"]) <= 0:
+            raise ValueError("excursion_agent must be an agent name, with mode roam and min_isolation_s > 0")
+        if float(s["excursion_extra_m"]) < 0 or int(s["excursion_pre_waypoints"]) < 0:
+            raise ValueError("excursion_extra_m and excursion_pre_waypoints must not be negative")
     if s["mode"] == "roam" and float(s["min_isolation_s"]) > 0 and int(s["max_dropped_links"]) < len(names) - 1:
         raise ValueError(f"min_isolation_s needs max_dropped_links >= {len(names) - 1} (all of one agent's links are down at once)")
     arcs = s["heading_sectors_deg"]
@@ -202,7 +212,7 @@ def _plan_roam(cfg, s):
     inner, outer = float(s["roam_radius_m"]) + 3.0, float(s["arena_radius_m"])
     arcs = s["heading_sectors_deg"]
 
-    def allowed(p):
+    def allowed(p, outer=outer):
         r = math.hypot(p[0] - centre[0], p[1] - centre[1])
         if r <= inner:
             return True
@@ -213,9 +223,9 @@ def _plan_roam(cfg, s):
         th = math.degrees(math.atan2(p[1] - centre[1], p[0] - centre[0])) % 360
         return any((th - lo) % 360 <= ((hi - lo) % 360 or 360) for lo, hi in arcs)
 
-    def leg_ok(a, b):                                   # the whole straight leg must stay where flying is allowed
+    def leg_ok(a, b, outer=outer):                      # the whole straight leg must stay where flying is allowed
         n = max(1, int(math.dist(a, b)))
-        return all(allowed((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n)) for i in range(n + 1))
+        return all(allowed((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n), outer) for i in range(n + 1))
 
     def draw_point():
         for _ in range(10000):
@@ -230,11 +240,11 @@ def _plan_roam(cfg, s):
             pts, length = [home], 0.0
             while True:
                 p = draw_point()
-                if not leg_ok(pts[-1], p):
+                if math.dist(pts[-1], p) < MIN_LEG_M or not leg_ok(pts[-1], p):
                     continue
                 pts.append(p); length += math.dist(pts[-2], p)
                 back = math.dist(p, home)
-                if (length + back) / speed >= s["min_flight_s"] and leg_ok(p, home):
+                if (length + back) / speed >= s["min_flight_s"] and back >= MIN_LEG_M and leg_ok(p, home):
                     pts.append(home)
                     times = [0.0]
                     for u, v in zip(pts, pts[1:]):
@@ -243,6 +253,31 @@ def _plan_roam(cfg, s):
                 if len(pts) > 40:
                     break
         raise ValueError("could not draw a flight path of min_flight_s inside the allowed area")
+
+    def draw_excursion_path(home):
+        """Random local waypoints, then out to a point just beyond range of everyone, hold there, then home. The hold is a pair of equal
+        waypoints (positions interpolate, so the vehicle waits). The hold outlasts min_isolation_s by 4 s for the entry and the tracking lag."""
+        r_out = D + margin + float(s["excursion_extra_m"])
+        hold = float(s["min_isolation_s"]) + 4.0
+        for _ in range(1000):
+            pts = [home]
+            for _ in range(int(s["excursion_pre_waypoints"])):
+                p = draw_point()
+                if math.dist(pts[-1], p) >= MIN_LEG_M and leg_ok(pts[-1], p):
+                    pts.append(p)
+            th = rng.uniform(0, 2 * math.pi)
+            e = (round(centre[0] + r_out * math.cos(th), 2), round(centre[1] + r_out * math.sin(th), 2))
+            lim = r_out + 1.0
+            if not (allowed(e, lim) and leg_ok(pts[-1], e, lim) and leg_ok(e, home, lim)):
+                continue
+            times = [0.0]
+            for u, v in zip(pts, pts[1:]):
+                times.append(times[-1] + math.dist(u, v) / speed)
+            pts.append(e); times.append(times[-1] + math.dist(pts[-2], e) / speed)
+            pts.append(e); times.append(times[-1] + hold)
+            pts.append(home); times.append(times[-1] + math.dist(e, home) / speed)
+            return pts, times
+        raise ValueError("no excursion point of the excursion agent lies where flying is allowed (see heading_sectors_deg)")
 
     def at(path, t):                                    # setpoint position at time t (clamped), linear along the legs
         pts, times = path
@@ -292,7 +327,7 @@ def _plan_roam(cfg, s):
         return max_risk, sorted(events, key=lambda e: e["t_start_s"]), sorted(isolations, key=lambda e: e["t_start_s"])
 
     for attempt in range(1, int(s["max_attempts"]) + 1):
-        paths = {n: draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2))) for n in names}
+        paths = {n: (draw_excursion_path if n == s["excursion_agent"] else draw_path)((round(spawn[n][0], 2), round(spawn[n][1], 2))) for n in names}
         t_total = max(p[1][-1] for p in paths.values()) + float(s["end_hold_s"])
         max_risk, events, isolations = evaluate(paths, t_total)
         if (max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"])
