@@ -36,7 +36,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `agents` | One entry per robot (below) |
 | `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
 | `swarm.qos.leader_state`, `swarm.qos.peer_state` | Optional: DDS QoS of the radio-side topics `/swarm/leader_state` (leader-follower) and `/mesh/peer_state` (mesh dropout) (below). Default `best_effort`, `volatile`, depth 1 (10 for `peer_state`) |
-| `scenario` | Optional: `type` (`leader_follower`, the default, or `mesh_dropout`) and, for the latter, the `mesh_dropout` keys (`mode`: `roam`, every agent flies, or `excursion`, one wanderer; seed, speed, arena, margins, `heading_sectors_deg`, ...): see [MESH_DROPOUT.md](MESH_DROPOUT.md) |
+| `scenario` | Optional: `type` (`leader_follower`, the default, or `mesh_dropout`) and, for the latter, the `mesh_dropout` keys (`mode`: `roam`, every agent flies, or `excursion`, one wanderer; seed, speed, arena, margins, `heading_sectors_deg`, `min_isolation_s` (one agent out of range of all others for this long; 0 = off), ...): see [MESH_DROPOUT.md](MESH_DROPOUT.md) |
 | `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
