@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Cyclone DDS for the mesh-dropout scenario: the same radio-only binding as cyclonedds_agent.xml, plus a shorter discovery announcement interval.
+     Why: when a neighbour is out of range for longer than the participant lease (10 s by default) DDS drops it, and it is only found again at its
+     next participant announcement (SPDP), 30 s apart by default. That would make a link look dead for up to 30 s after the signal is back.
+     With SPDPInterval = 1 s the measured recovery is dominated by the radio, not by discovery. This changes how much discovery traffic crosses
+     the channel (about 30x more announcements), so it is only used by this scenario. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="42">
+    <General>
+      <Interfaces><NetworkInterface name="radio0" multicast="true" /></Interfaces>
+      <AllowMulticast>true</AllowMulticast>
+    </General>
+    <Discovery>
+      <SPDPInterval>1s</SPDPInterval>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

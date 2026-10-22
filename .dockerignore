@@ -1,0 +1,9 @@
+.git
+logs/
+dev_docs/
+build/
+install/
+log/
+**/__pycache__/
+*.pcap
+CLAUDE.md

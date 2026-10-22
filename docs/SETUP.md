@@ -13,6 +13,9 @@ Developed and tested on Ubuntu 24.04 (Linux 6.8).
 
 ## Build
 
+To run everything in Docker instead (nothing but Docker on the host), see [CONTAINERS.md](CONTAINERS.md): build the PX4 runtime image
+(`docker build -t cosim-px4-runtime px4/`, below) once, then `python3 orchestrator/cosim.py build`. The rest of this page is the native setup.
+
 1. **ns-3 3.48 and the scenarios** (downloads ns-3, applies the local patch, builds into `~/dev/ns-3-build`):
    ```
    ns3/build_ns3.sh

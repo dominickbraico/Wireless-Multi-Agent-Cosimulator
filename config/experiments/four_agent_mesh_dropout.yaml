@@ -1,0 +1,100 @@
+# Single source of truth for an experiment. Read by the ns-3 scenario, the
+# orchestrator and (later) the pose bridge. A copy is saved in every run's log dir.
+experiment:
+  name: four_agent_mesh_dropout
+  duration_s: 60
+  log_dir: logs/${name}_${timestamp}
+time:
+  ns3_sync_mode: BestEffort        # BestEffort | HardLimit
+  ns3_hard_limit_s: 0.1
+  max_lag_ms: 10                   # run flagged invalid above this
+  min_rtf: 0.95
+  rtf_window_s: 5.0                # sliding-mean window for the RTF validity check
+network:
+  backend: ns3                     # network emulator engine (only ns3 exists; a 'netem' stress backend would be another)
+  technology: wifi                 # radio technology = which ns-3 scenario runs; see docs/CONTAINERS.md 'Changing the networking technology'
+  wifi:
+    standard: 80211a
+    mac: adhoc
+    rate_manager: ConstantRate
+    data_mode: OfdmRate12Mbps
+    control_mode: OfdmRate6Mbps
+    tx_power_dbm: 4.0          # reduced from 16 so that one drone can be cut off from all others by a short trip (range to the -82 dBm cutoff about 20.5 m)
+    error_rate_model: TableBased   # TableBased (ns-3 default for Yans) | Nist
+    retry_limit: null              # null = ns-3 default (7 attempts)
+    phy:                           # receiver parameters; defaults are ns-3's, all hardware-measurable
+      rx_noise_figure_db: 7.0
+      preamble_detection_min_rssi_dbm: -82.0   # frames weaker than this are never detected (hard cutoff)
+      preamble_detection_snr_db: 4.0           # ... or with SNR below this
+      cca_ed_threshold_dbm: -62.0
+      rx_sensitivity_dbm: -101.0
+  channel:
+    loss:
+      - {type: LogDistance, exponent: 3.0, ref_distance_m: 1.0, ref_loss_db: 46.6777}
+    delay: ConstantSpeed
+  pose:
+    transport: udp
+    listen_addr: 127.0.0.1         # where the ns-3 pose listener binds (mgmt network in Docker)
+    port: 5600
+    rate_hz: 50
+  radio_subnet: 10.10.0.0/24
+  radio_firewall:                  # default-deny on radio0 inside each agent; absent = no firewall (link tests)
+    enabled: false                 # the PX4 flight tests turn this on
+    allow_udp_ports: [17900, 18149]   # RTPS ports of DDS domain 42 (7400 + 250*42 .. +249)
+  mgmt:                            # unemulated management network: simulator <-> agents, never agent <-> agent
+    bridge: br-mgmt
+    subnet: 10.20.0.0/24
+    bridge_ip: 10.20.0.1           # simulator side (Gazebo, pose bridge, ns-3) lives here
+# Flat world (px4_flat): the quick variant for testing the scenario. The Baylands variant is four_agent_mesh_dropout_baylands.yaml.
+# Same Wi-Fi/PHY as five_agent_wifi.yaml: the signal reaches the receiver floor at about 51 m (tools/link_budget.py).
+agents:
+  # Triangle with 10 m sides plus its centroid. agent4 (centroid) is the wanderer, the other three are anchors that hover at their spawn points.
+  - {name: agent1, radio_ip: 10.10.0.1, mgmt_ip: 10.20.0.11, px4_instance: 0, px4_gz_model: x500_0, spawn_pose: [-5.0, 0.0, 0.3, 0], tap: tap-a1, bridge: br-a1, antenna_offset: [0, 0, 0.1]}
+  - {name: agent2, radio_ip: 10.10.0.2, mgmt_ip: 10.20.0.12, px4_instance: 1, px4_gz_model: x500_1, spawn_pose: [5.0, 0.0, 0.3, 0], tap: tap-a2, bridge: br-a2, antenna_offset: [0, 0, 0.1]}
+  - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [0.0, 8.66, 0.3, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1]}
+  - {name: agent4, radio_ip: 10.10.0.4, mgmt_ip: 10.20.0.14, px4_instance: 3, px4_gz_model: x500_3, spawn_pose: [0.0, 2.89, 0.3, 0], tap: tap-a4, bridge: br-a4, antenna_offset: [0, 0, 0.1]}
+# Scenario: instead of the leader-follower flight, the agents run the mesh-dropout demonstration (docs/MESH_DROPOUT.md). Every key is optional;
+# the values shown are the defaults except `seed`. The plan is a pure function of this section, so a run can be repeated exactly.
+scenario:
+  type: mesh_dropout
+  mesh_dropout:
+    mode: roam                 # roam: EVERY agent flies a seeded random path | excursion: one wanderer flies, the others hover
+    seed: 7                    # all random draws come from this seed
+    altitude_base_m: 8.0       # agent i (position in the agents list) flies at base + i * step metres above its arming point
+    altitude_step_m: 3.0
+    speed_mps: 3.0
+    heartbeat_hz: 5.0          # every agent broadcasts its state on the radio at this rate
+    link_timeout_s: 1.5        # a neighbour not heard for this long counts as LOST
+    margin_m: 3.0              # distances are judged against D (where the signal reaches the receiver floor) plus or minus this margin
+    # mode roam:
+    arena_radius_m: 8.0        # waypoints are drawn within this radius of the centre of the spawn points (all agents except excursion_agent; < D/2 so their links stay up)
+    max_dropped_links: 3       # a plan is kept only if never more than this many links are at risk (distance > D - margin) at once (3 = all of one drone's links) ...
+    min_drop_events: 2         # ... and at least this many links clearly drop (distance > D + margin for min_drop_s)
+    min_drop_s: 6.0
+    excursion_agent: agent3    # this agent is the one cut off: out-and-back trip to just beyond range of everyone (D + margin_m + excursion_extra_m from the centre)
+    excursion_extra_m: 2.0
+    min_isolation_s: 12.0      # and one drone must be beyond D + margin of ALL the others at once for this long (0 = not required)
+    min_flight_s: 40.0         # each agent's path lasts at least this long; all agents land together at the end
+    end_hold_s: 5.0
+    tracking_lag_s: 1.0        # how late a vehicle follows its setpoint (the planner predicts link states from lagged positions)
+    # mode excursion:
+    wanderers: [agent4]        # these fly; every other agent hovers at its spawn point
+    random_waypoints: 3        # random points before the excursion, and again after it
+    roam_radius_m: 20.0        # ... drawn inside this radius around the wanderer's spawn (all links stay up there)
+    excursion_links: [1, 2]    # the excursion drops this many anchor links (one value drawn from the seed)
+    dwell_s: 10.0              # hover time at the excursion point
+    heading_deg: null          # fixed excursion heading (ENU, 0 = east, 90 = north); default drawn from the seed
+    heading_sectors_deg: null  # or a list of [from, to] arcs (ENU degrees from the centre of the spawn points) the flights are restricted to; used for Baylands
+swarm:
+  qos:
+    peer_state:                # the heartbeat topic /mesh/peer_state (see docs/CONFIGURATION.md, "Swarm message QoS")
+      reliability: best_effort
+      durability: volatile
+      depth: 10                # keyless topic with several publishers: depth 1 makes simultaneous heartbeats overwrite each other
+simulator:
+  type: gazebo
+  world: worlds/two_agent_flat.sdf
+  world_name: two_agent_flat       # must equal the <world name> and the .sdf filename
+  pose_topic: pose/info            # under /world/<world_name>/
+  gz_partition: cosim
+  px4_world_name: px4_flat    # world used by the PX4 stack (worlds/px4_flat.sdf)

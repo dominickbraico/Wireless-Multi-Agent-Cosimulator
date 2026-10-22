@@ -17,6 +17,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `two_agent_wifi_snr_floor.yaml` | Same, with the RSSI floor lowered so an SNR floor sets the range (about 95 m) |
 | `two_agent_wifi_per_limited.yaml` | Both floors lowered so the packet error rate sets the range (gradual, about 100 to 110 m) |
 | `five_agent_wifi.yaml` | Five agents, one leader and four followers spaced 8 m apart |
+| `two_agent_wifi_80211g.yaml`, `two_agent_wifi_80211n.yaml` | `two_agent_wifi.yaml` with the radio technology changed to 802.11g (2.4 GHz) and 802.11n (5 GHz) |
 
 ## Sections
 
@@ -24,13 +25,18 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 |---|---|
 | `experiment` | `name`, `duration_s`, `log_dir` |
 | `time` | `ns3_sync_mode`, `ns3_hard_limit_s`, `max_lag_ms` (run flagged invalid above this), `min_rtf`, `rtf_window_s` |
-| `network.wifi` | `standard`, `mac`, `rate_manager`, `data_mode`, `control_mode`, `tx_power_dbm`, `error_rate_model` (`TableBased` or `Nist`), `retry_limit`, `phy.*` receiver parameters |
+| `network.technology` | Radio technology = which ns-3 scenario runs (default and only built-in: `wifi`). See [CONTAINERS.md](CONTAINERS.md), "Changing the networking technology" |
+| `network.wifi` | `standard` (`80211a`, `80211g`, `80211n`, `80211ac`, `80211ax`), `band`, `mac`, `rate_manager`, `data_mode`, `control_mode`, `tx_power_dbm`, `error_rate_model` (`TableBased` or `Nist`), `retry_limit`, `phy.*` receiver parameters |
 | `network.channel` | `loss` (propagation loss models), `delay` |
+| `network.link_log_interval_s` | Optional (default 0.5, 0 = off): how often ns-3 logs the signal strength of every ordered agent pair to `pair_rssi.csv` (simulated seconds) |
 | `network.pose` | Pose feed: `transport`, `listen_addr`, `port`, `rate_hz`. Omit the section to run with static positions |
 | `network.radio_subnet` | Subnet of the emulated radio, e.g. `10.10.0.0/24` |
 | `network.radio_firewall` | `enabled`, `allow_udp_ports` (the RTPS ports of the swarm DDS domain) |
 | `network.mgmt` | Unemulated management network between the simulator and the robots |
 | `agents` | One entry per robot (below) |
+| `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
+| `swarm.qos.leader_state`, `swarm.qos.peer_state` | Optional: DDS QoS of the radio-side topics `/swarm/leader_state` (leader-follower) and `/mesh/peer_state` (mesh dropout) (below). Default `best_effort`, `volatile`, depth 1 (10 for `peer_state`) |
+| `scenario` | Optional: `type` (`leader_follower`, the default, or `mesh_dropout`) and, for the latter, the `mesh_dropout` keys (`mode`: `roam`, every agent flies, or `excursion`, one wanderer; seed, speed, arena, margins, `heading_sectors_deg`, `min_isolation_s` (one agent out of range of all others for this long; 0 = off), `excursion_agent` (the agent that makes the trip out of range), `excursion_extra_m`, ...): see [MESH_DROPOUT.md](MESH_DROPOUT.md) |
 | `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
@@ -56,6 +62,19 @@ threshold, sensitivity) determine which mechanism limits the range; each corresp
 | `role` | Optional: `leader` or `follower` |
 | `follower_offset` | Optional: `[x, y, z]` formation offset from the leader (world frame) |
 
+### Docker deployment (`containers`)
+
+The container deployment ([CONTAINERS.md](CONTAINERS.md)) derives everything from the sections above. Two optional keys exist, both for avoiding address clashes:
+
+```yaml
+containers:
+  ns3_mgmt_ip: 10.20.0.2           # the ns3 container on the management network (default: first address not used by the simulator or an agent)
+  link_subnet_base: 10.30.0.0/16   # agent i gets the i-th /24 of this block as its private link network to ns-3
+```
+
+In a container run, `network.mgmt.bridge_ip` is the simulator container's address, `network.pose.listen_addr` is replaced by the ns3
+container's address in the copy of the YAML the containers read (`<log dir>/compose/experiment_run.yaml`), and `bridge` and `tap` still name the bridge and TAP inside the ns3 container.
+
 ### ns-3 start position
 
 ns-3 needs a position for every node at start-up. It is replaced by the first Gazebo pose when the pose feed runs, and it is
@@ -73,6 +92,32 @@ Leader-follower runs use `orchestrator/fleet.py` (`orchestrator/fleet.py <yaml>`
 - All other agents are followers.
 - A follower's offset (follower minus leader, world frame) is its `follower_offset` if given, otherwise the difference of the
   two `spawn_pose` values, so each follower holds the formation it was spawned in. `OFFSET=x,y,z` forces one offset on every follower.
+
+### Swarm message QoS (`swarm.qos`)
+
+```yaml
+swarm:
+  qos:
+    leader_state:                 # /swarm/leader_state, the only topic that crosses the emulated channel
+      reliability: best_effort    # best_effort | reliable
+      durability: volatile        # volatile | transient_local
+      depth: 1                    # keep-last depth, integer >= 1
+```
+
+All keys are optional; the values shown are the defaults. The leader and every follower get the same profile (a best-effort
+publisher never matches a reliable subscriber, so differing profiles deliver nothing). Invalid values are rejected before the
+run starts. The profile in effect is printed in each `swarm_*.log` (`leader_state QoS: ...`).
+
+Choose by what the message means, not by default. `best_effort` suits periodic state where only the newest sample matters:
+loss stays visible (sequence gaps) and no retransmission load is added to the shared channel. `reliable` suits a message other
+agents plan around, because a lost one is otherwise invisible; on 802.11 it converts loss into latency, so check `latency_ms`
+in `swarm_follower_*.csv`. `transient_local` hands a late-joining agent the last sample. Samples larger than one 1500-byte frame
+are fragmented, and under `best_effort` losing one fragment loses the sample. Further topics (for example a committed
+trajectory) are added as further keys under `swarm.qos`; `leader_state` and `peer_state` exist today. `peer_state` (the mesh-dropout heartbeat) defaults to depth 10, not 1: the topic has no key and
+several publishers, so a subscriber's keep-last history is shared by all senders and depth 1 lets simultaneous heartbeats overwrite each other ([MESH_DROPOUT.md](MESH_DROPOUT.md)).
+
+Applies to `tests/leader_follower_fly.sh`, `tests/containers_mesh_dropout.sh` (`peer_state`) and the container deployment (the demos use those). `tests/swarm_leader_follower.sh`
+and the sweep scripts start the node by hand and use its defaults.
 
 ## Adding robots
 

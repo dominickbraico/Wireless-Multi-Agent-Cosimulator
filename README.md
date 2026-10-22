@@ -17,6 +17,8 @@ so channel effects such as range limits, loss, contention and latency act on the
 - Isolation checks: nothing flows between robots without ns-3; only the swarm DDS domain crosses the radio
 - Run-validity checks (ns-3 real-time lag, Gazebo real-time factor) and per-follower analysis of formation error, loss and latency
 - One experiment YAML as the single source of truth for a run
+- Runs natively (network namespaces) or fully in Docker Compose: one container per agent, one for ns-3, one for the physics simulator ([docs/CONTAINERS.md](docs/CONTAINERS.md))
+- Selectable radio technology (802.11a/g/n/ac/ax today; new technologies plug in as ns-3 scenarios) and a 2D map of the signal strength of every agent pair (`tools/plot_comm_map.py`)
 
 ## Quick start
 
@@ -34,13 +36,31 @@ Leader-follower flight with five robots (needs the PX4 runtime, see [docs/SETUP.
 tests/run_rootless.sh tests/leader_follower_fly.sh --config config/experiments/five_agent_wifi.yaml
 ```
 
+The same flight in Docker Compose, with nothing but Docker on the host ([docs/CONTAINERS.md](docs/CONTAINERS.md)):
+
+```
+python3 orchestrator/cosim.py build
+tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.yaml
+demo/run_container_demo.sh        # the same flight with the Gazebo GUI and a live signal-strength map
+```
+
+A second scenario in Docker, in which every agent flies a seeded random path and returns to its spawn point so that links drop and recover ([docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md)):
+
+```
+tests/containers_mesh_dropout.sh --config config/experiments/four_agent_mesh_dropout.yaml
+demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml   # Baylands, Gazebo GUI + live map
+```
+
 ## Documentation
 
 | Document | Contents |
 |---|---|
 | [docs/SETUP.md](docs/SETUP.md) | Requirements, build, running, troubleshooting |
+| [docs/CONTAINERS.md](docs/CONTAINERS.md) | Docker deployment, container networking, the physics-simulator container, adding Isaac Sim, changing the network technology |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, emulation path, DDS domains, swarm protocol, limitations |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | The experiment YAML, agents, roles, positions |
+| [docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md) | The mesh-dropout scenario: links dropping and recovering, with heartbeat measurements |
+| [docs/SIGNAL_MODEL.md](docs/SIGNAL_MODEL.md) | How the map's signal strength is calculated: equation, parameters, defaults, origin, limitations |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | Tests, outputs, pass criteria, reference results |
 | [ns3/patches/README.md](ns3/patches/README.md) | The local ns-3 patch |
 
@@ -50,7 +70,8 @@ tests/run_rootless.sh tests/leader_follower_fly.sh --config config/experiments/f
 |---|---|
 | `config/` | Experiment YAMLs (`experiments/`) and DDS configurations (`dds/`) |
 | `ns3/` | ns-3 build script, local patch, scenarios (`wifi_adhoc_tap`, `per_table`) |
-| `orchestrator/` | Network wiring, stack launcher, fleet roles |
+| `orchestrator/` | Network wiring, stack launcher, fleet roles, Docker Compose generator and driver (`cosim.py`) |
+| `docker/` | Dockerfiles and entrypoints for the ns-3, agent and simulator containers |
 | `adapters/gazebo/` | Pose bridge and distance-sweep driver |
 | `ros2_ws/src/` | `swarm_msgs`, `swarm_control`, `px4_offboard_control` |
 | `tests/` | Acceptance and experiment scripts |

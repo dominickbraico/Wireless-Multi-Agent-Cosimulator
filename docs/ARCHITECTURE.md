@@ -4,8 +4,8 @@
 
 *Conceptual architecture. The physics simulator provides each agent's PX4 SITL with sensor data and receives motor commands, and publishes
 ground-truth poses that drive each agent's mobility model in the network simulator. ROS 2 traffic between agents is carried by the network
-simulator's wireless model through a TapBridge. In the current implementation the "containers" are host processes and per-agent Linux network
-namespaces (the Docker backend is not implemented), and the ROS 2 control layer is split as described below.*
+simulator's wireless model through a TapBridge. Two deployments implement it: the native one, where the "containers" are host processes in per-agent Linux network
+namespaces, and the Docker one, where they are real containers ([CONTAINERS.md](CONTAINERS.md)). The ROS 2 control layer is split as described below.*
 
 ## Overview
 
@@ -17,6 +17,20 @@ The cosimulator couples three independent parts:
 
 Packets from real ROS 2 processes cross a simulated Wi-Fi channel; the simulator only supplies positions. Robots have
 no network path to each other other than through ns-3. This is checked by the isolation tests (see [EXPERIMENTS.md](EXPERIMENTS.md)).
+
+## Deployments
+
+The same experiment YAML, ns-3 scenario, agent software and tests run two ways:
+
+| | Native | Docker Compose |
+|---|---|---|
+| Agent isolation | Linux network namespace per agent (`orchestrator/wire.py`) | One container per agent, private link network to ns-3 (`orchestrator/container_net.py`) |
+| ns-3 | Host process | `ns3` container |
+| Physics simulator | Host process | `simulator` container |
+| Needs on the host | ROS 2, Gazebo, PX4 runtime, ns-3 build, root or user namespaces | Docker only |
+| Run with | `tests/leader_follower_fly.sh` | `tests/containers_leader_follower.sh` |
+
+The wireless emulation path, DDS domains, swarm protocol and run-validity checks below are identical in both.
 
 ## Components
 
@@ -90,9 +104,12 @@ PX4 instance *N* publishes under `/px4_N/fmu/...` (instance 0 has no prefix) and
 
 ## Swarm protocol
 
+This section describes the leader-follower scenario (the default). A second scenario, `scenario.type: mesh_dropout`, runs an all-to-all heartbeat (`mesh_msgs/PeerState` on `/mesh/peer_state`, same domain 42 and firewall)
+while one agent flies out of radio range and back: see [MESH_DROPOUT.md](MESH_DROPOUT.md).
+
 The only inter-robot message is `swarm_msgs/LeaderState`: sender id, per-sender sequence number, send timestamp, position and
-velocity in a shared world frame (ENU, metres). It uses best-effort, keep-last-1 QoS, so loss is visible rather than hidden
-by retransmission. Sequence numbers and timestamps give loss and latency without extra instrumentation.
+velocity in a shared world frame (ENU, metres). By default it uses best-effort, volatile, keep-last-1 QoS, so loss is visible rather than hidden
+by retransmission; the profile is configurable (`swarm.qos.leader_state`, see CONFIGURATION.md). Sequence numbers and timestamps give loss and latency without extra instrumentation.
 
 - **Leader:** reads its PX4 state on the local domain, converts it to the world frame and publishes at a fixed rate.
 - **Follower:** computes `target = leader position + offset`, publishes it on the local domain (`/swarm/follower_target`) and
@@ -106,7 +123,11 @@ assumes the ground is at z = 0.
 
 Because the emulation is real-time, a run is only meaningful if the simulators keep up. Each run reports:
 - **ns-3 lag** (wall clock minus simulated time) against `time.max_lag_ms`.
-- **Gazebo real-time factor**, as a sliding mean over `time.rtf_window_s` against `time.min_rtf`. Single-sample dips are reported but not fatal.
+- **Gazebo real-time factor** (simulated time advanced per wall-clock second; the emulated radio runs on the wall clock, so a simulator that falls behind
+  feeds ns-3 positions that are late relative to the traffic), as a sliding mean over `time.rtf_window_s` against `time.min_rtf`. Single-sample dips are reported but not fatal.
+  The measured window starts at the `go` signal (take-off) when a run has one (container runs, and native runs that wait for the GUI), otherwise 5 s after the first applied
+  pose, and ends with the poses. Stalls before take-off, such as a Gazebo GUI attaching, are printed as a `note` and are not part of the criterion. This window definition was
+  changed on 2026-10-21 after a GUI-attach stall (0.4 s at RTF 0.04, on the ground) failed the previous definition; the threshold (`min_rtf`) was not changed.
 
 ## Limitations
 
@@ -114,5 +135,5 @@ Because the emulation is real-time, a run is only meaningful if the simulators k
 - The follower's link-loss behaviour is configurable (`hold` or `land`); no policy is recommended yet.
 - One leader per experiment; followers only receive.
 - Quadrotor (PX4 x500) in Gazebo only. A second simulator adapter requires a pose bridge and a vehicle driver.
-- The Docker backend of `wire.py` is not implemented; robots run in plain network namespaces.
+- The native deployment runs robots in plain network namespaces; the container deployment is described in [CONTAINERS.md](CONTAINERS.md) (headless, Gazebo only).
 - Ground is assumed at z = 0 in the swarm node's altitude conversion.
