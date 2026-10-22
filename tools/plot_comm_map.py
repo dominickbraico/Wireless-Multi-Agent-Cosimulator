@@ -45,6 +45,7 @@ DEFAULT_STRONG_DBM = -50.0
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "orchestrator"))
 from linkmodel import dropout_range_m, floor_dbm, rx_power_dbm, tx_power_dbm   # the same signal model the planner uses
+from agent_colors import agent_colors                                         # one colour per agent, shared with the Gazebo trails
 
 
 def info_text(cfg, floor):
@@ -161,13 +162,14 @@ def make_rssi_of(cfg, sample):
 
 
 def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, label_links=True):
+    colours = agent_colors(cfg)                          # the agent's node and trail use the colour of its Gazebo trail
     xy = np.array([pos[n][:2] for n in names])
     if tracks:
         for n in names:
             if n in tracks:
                 ts, ps = tracks[n]
                 m = ts <= t
-                ax.plot(ps[m, 0], ps[m, 1], color="#9aa0a6", lw=0.8, alpha=0.6, zorder=1)
+                ax.plot(ps[m, 0], ps[m, 1], color=colours[n], lw=1.2, alpha=0.55, zorder=1)
     use_arcs = curved == "always" or (curved == "auto" and collinear(xy))
     used_ns3 = True
     for (i, a), (j, b) in itertools.combinations(enumerate(names), 2):
@@ -187,7 +189,7 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
             ax.text(mid[0], mid[1], f"{rssi:.0f}", fontsize=7, ha="center", va="center", zorder=4, color="#202124",
                     bbox=dict(boxstyle="round,pad=0.12", fc="white", ec=colour, lw=0.9, alpha=0.92))
     for n, (x, y) in zip(names, xy):
-        ax.scatter([x], [y], s=90, marker="o", c="#3c4043", edgecolors="white", linewidths=1.2, zorder=5)
+        ax.scatter([x], [y], s=130, marker="o", c=colours[n], edgecolors="#202124", linewidths=1.6, zorder=5)    # dark ring: the yellow and orange agents would blend into the links
         ax.annotate(f"{n}   Tx {tx_power_dbm(cfg):.0f} dBm", (x, y), textcoords="offset points",
                     xytext=(10, 7), fontsize=8, fontweight="bold", color="#202124", zorder=6,
                     bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.75))

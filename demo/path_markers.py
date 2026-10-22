@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Draw each agent's planned flight path (red) and optionally a halo around each vehicle (yellow, --halos) in the Gazebo GUI, using
+"""Draw a trail behind each vehicle in the Gazebo GUI, in the agent's own colour (orchestrator/agent_colors.py, the colour of its node on the signal map), and optionally a halo around each vehicle (yellow, --halos) in the Gazebo GUI, using
 Gazebo's marker service (/marker, gz.msgs.Marker). Markers are GUI-side only: they are not part of the simulated
 world, are not seen by sensors or physics, and disappear when the GUI closes.
 
-    path_markers.py <experiment.yaml> [--boxes] [--plan] [--halos] [--clear]   red wireframe box on each vehicle (--boxes), planned paths (--plan), yellow halos (--halos)
+    path_markers.py <experiment.yaml> [--plan] [--halos] [--clear]   planned paths (--plan), yellow halos on the vehicles (--halos)
     path_markers.py <experiment.yaml> --trace <log dir>          follow a run: draw each vehicle's flown path as it moves
 
 Needs the same environment as the other `gz service` calls in demo/run_container_demo.sh (GZ_PARTITION, GZ_IP), so
 call it through that script's GZENV. Only scenario.type mesh_dropout has a precomputed path (orchestrator/mesh_plan.py);
 other scenarios get no planned path.
 
---trace polls <log dir>/ns3/pose_applied.csv (the world poses the ns-3 scenario applied, ENU m) and adds one red leg
-per vehicle each time it has moved TRACE_STEP_M from the last drawn point, until it is killed. It first deletes every
+--trace polls <log dir>/ns3/pose_applied.csv (the world poses the ns-3 scenario applied, ENU m) and adds one leg
+per vehicle each time it has moved TRACE_STEP_M from the last drawn point, until it is killed. The trail is in the agent's colour. It first deletes every
 marker, so a leftover trace from an earlier run in the same GUI is gone.
 
 With --plan, what is drawn is the PLAN (straight legs between the planned waypoints at each agent's planned altitude above its
 spawn point), not the flown trajectory. The vehicles track it with a lag (mesh_dropout.tracking_lag_s) and wind/terrain
 effects are not drawn. Gazebo lines are one pixel wide, so each leg is a thin box instead; the width is LEG_WIDTH_M.
 """
-import csv
 import math
 import subprocess
 import sys
@@ -27,13 +26,13 @@ import time
 import yaml
 
 sys.path.insert(0, __file__.rsplit("/demo/", 1)[0] + "/orchestrator")
+from agent_colors import agent_colors, rgb
 
-LEG_WIDTH_M = 0.4        # visible from the overview camera (tens of metres up)
+sys.path.insert(0, __file__.rsplit("/demo/", 1)[0] + "/orchestrator")
+
+LEG_WIDTH_M = 0.7        # visible from the overview camera (tens of metres up)
 HALO_RADIUS_M = 1.6
-BOX_SIZE_M = 2.5         # side of the red wireframe box around each vehicle
-BOX_EDGE_M = 0.12        # thickness of its edges
 TRACE_STEP_M = 1.0       # shorter steps only add markers; Gazebo keeps each one for the life of the GUI
-RED = (1.0, 0.05, 0.05, 1.0)
 YELLOW = (1.0, 0.9, 0.0, 0.35)       # translucent: the vehicle stays visible inside it
 
 
@@ -66,7 +65,7 @@ def _leg(ns, i, p, q, rgba):
                  f"pose {{ position {{ x: {m[0]} y: {m[1]} z: {m[2]} }} orientation {{ x: {qx} y: {qy} z: {qz} w: {qw} }} }}")
 
 
-def trace(cfg, log_dir):
+def trace(cfg, log_dir, colours):
     names = [a["name"] for a in cfg["agents"]]
     path = f"{log_dir}/ns3/pose_applied.csv"
     last, count, pos, partial = {}, {}, 0, ""
@@ -90,33 +89,15 @@ def trace(cfg, log_dir):
             if q is None:
                 last[n] = p
             elif math.dist(p, q) >= TRACE_STEP_M:
-                _leg(f"trace_{n}", count.get(n, 0), q, p, RED)
+                _leg(f"trace_{n}", count.get(n, 0), q, p, colours[n])
                 count[n] = count.get(n, 0) + 1
                 last[n] = p
         time.sleep(0.5)
 
 
-def _wire_box(name, model):
-    """12 thin boxes forming the edges of a cube, attached to the vehicle's model visual (so the cube follows its position and
-    attitude); positions are relative to the model origin. True when every edge was sent."""
-    h, t = BOX_SIZE_M / 2, BOX_EDGE_M
-    ok, i = True, 0
-    for axis in range(3):                                  # edges parallel to x, then y, then z
-        for a in (-h, h):
-            for b in (-h, h):
-                c = [0.0, 0.0, 0.0]
-                c[(axis + 1) % 3], c[(axis + 2) % 3] = a, b
-                size = [t, t, t]
-                size[axis] = BOX_SIZE_M + t
-                ok &= _send(f"ns: 'box_{name}' id: {i} action: ADD_MODIFY type: BOX parent: '{model}' {_material(RED)} "
-                            f"scale {{ x: {size[0]} y: {size[1]} z: {size[2]} }} "
-                            f"pose {{ position {{ x: {c[0]} y: {c[1]} z: {c[2]} }} }}")
-                i += 1
-    return ok
-
-
 def main():
     cfg = yaml.safe_load(open(sys.argv[1]))
+    colours = {n: (*rgb(c), 1.0) for n, c in agent_colors(cfg).items()}
     clear = "--clear" in sys.argv
     if clear or "--trace" in sys.argv:
         _send("action: DELETE_ALL")
@@ -134,11 +115,8 @@ def main():
             paths[name] = [(x, y, z) for x, y in w["waypoints_enu"]]
     for name, pts in paths.items():
         for i, (p, q) in enumerate(zip(pts, pts[1:])):
-            r = _leg(f"path_{name}", i, p, q, RED)
+            r = _leg(f"path_{name}", i, p, q, colours[name])
             ok, bad = ok + r, bad + (not r)
-    for a in (cfg["agents"] if "--boxes" in sys.argv else []):
-        r = _wire_box(a["name"], a["px4_gz_model"])
-        ok, bad = ok + r, bad + (not r)
     # Halo (off by default: it hides the vehicle): a translucent sphere attached to the vehicle's model visual.
     for k, a in enumerate(cfg["agents"] if "--halos" in sys.argv else []):
         r = _send(f"ns: 'halo' id: {k} action: ADD_MODIFY type: SPHERE parent: '{a['px4_gz_model']}' {_material(YELLOW)} "
@@ -146,7 +124,7 @@ def main():
         ok, bad = ok + r, bad + (not r)
     print(f"markers: {ok} sent, {bad} failed", flush=True)
     if "--trace" in sys.argv:
-        trace(cfg, sys.argv[sys.argv.index("--trace") + 1])
+        trace(cfg, sys.argv[sys.argv.index("--trace") + 1], colours)
     return 1 if bad else 0
 
 
