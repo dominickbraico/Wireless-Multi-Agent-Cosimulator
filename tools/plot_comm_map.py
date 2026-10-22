@@ -162,14 +162,8 @@ def make_rssi_of(cfg, sample):
 
 
 def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, label_links=True):
-    colours = agent_colors(cfg)                          # the agent's node and trail use the colour of its Gazebo trail
+    colours = agent_colors(cfg)                          # the agent's node uses the colour of its Gazebo trail
     xy = np.array([pos[n][:2] for n in names])
-    if tracks:
-        for n in names:
-            if n in tracks:
-                ts, ps = tracks[n]
-                m = ts <= t
-                ax.plot(ps[m, 0], ps[m, 1], color=colours[n], lw=1.2, alpha=0.55, zorder=1)
     use_arcs = curved == "always" or (curved == "auto" and collinear(xy))
     used_ns3 = True
     for (i, a), (j, b) in itertools.combinations(enumerate(names), 2):
@@ -194,7 +188,7 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
                     xytext=(10, 7), fontsize=8, fontweight="bold", color="#202124", zorder=6,
                     bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.75))
     pts = [xy]
-    if tracks:                                           # keep the whole trace in view, not just the current positions
+    if tracks:                                           # no trail is drawn, but the view still spans everywhere the agents have been, so it does not rescale as they move
         pts += [ps[ts <= t][:, :2] for ts, ps in (tracks[n] for n in names if n in tracks) if (ts <= t).any()]
     allp = np.vstack(pts)
     span = max(np.ptp(allp[:, 0]), np.ptp(allp[:, 1]), 1.0)
