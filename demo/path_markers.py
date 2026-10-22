@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Draw each agent's planned flight path (red) and a halo around each vehicle (yellow) in the Gazebo GUI, using
+"""Draw each agent's planned flight path (red) and optionally a halo around each vehicle (yellow, --halos) in the Gazebo GUI, using
 Gazebo's marker service (/marker, gz.msgs.Marker). Markers are GUI-side only: they are not part of the simulated
 world, are not seen by sensors or physics, and disappear when the GUI closes.
 
-    path_markers.py <experiment.yaml> [--plan] [--clear]        halos (+ the planned paths with --plan)
+    path_markers.py <experiment.yaml> [--plan] [--halos] [--clear]   planned paths (--plan), yellow halos on the vehicles (--halos)
     path_markers.py <experiment.yaml> --trace <log dir>          follow a run: draw each vehicle's flown path as it moves
 
 Needs the same environment as the other `gz service` calls in demo/run_container_demo.sh (GZ_PARTITION, GZ_IP), so
 call it through that script's GZENV. Only scenario.type mesh_dropout has a precomputed path (orchestrator/mesh_plan.py);
-other scenarios get the halos only.
+other scenarios get no planned path.
 
 --trace polls <log dir>/ns3/pose_applied.csv (the world poses the ns-3 scenario applied, ENU m) and adds one red leg
 per vehicle each time it has moved TRACE_STEP_M from the last drawn point, until it is killed. It first deletes every
@@ -115,8 +115,8 @@ def main():
         for i, (p, q) in enumerate(zip(pts, pts[1:])):
             r = _leg(f"path_{name}", i, p, q, RED)
             ok, bad = ok + r, bad + (not r)
-    # Halo: a translucent sphere attached to the vehicle's model visual, so it follows the vehicle.
-    for k, a in enumerate(cfg["agents"]):
+    # Halo (off by default: it hides the vehicle): a translucent sphere attached to the vehicle's model visual.
+    for k, a in enumerate(cfg["agents"] if "--halos" in sys.argv else []):
         r = _send(f"ns: 'halo' id: {k} action: ADD_MODIFY type: SPHERE parent: '{a['px4_gz_model']}' {_material(YELLOW)} "
                   f"scale {{ x: {2 * HALO_RADIUS_M} y: {2 * HALO_RADIUS_M} z: {2 * HALO_RADIUS_M} }}")
         ok, bad = ok + r, bad + (not r)

@@ -2,22 +2,22 @@
 # The containerized flight (the YAML's scenario: leader-follower, or the mesh-dropout demonstration) with the Gazebo GUI and a LIVE 2D map of every agent pair's signal strength.
 # The simulation runs in Docker (one container per agent, ns-3, simulator); the Gazebo GUI and the map window run on the host.
 #
-#   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--no-prompt]
+#   demo/run_container_demo.sh [--config YAML] [--world NAME] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--halos] [--no-prompt]
 #
 #   --config Y   experiment YAML (default: config/experiments/five_agent_wifi.yaml). Its `scenario.type` picks the flight: leader_follower (default) or mesh_dropout,
 #                e.g. --config config/experiments/four_agent_mesh_dropout_baylands.yaml (docs/MESH_DROPOUT.md)
 #   --world N    Gazebo world (default: from the YAML; Fuel models, e.g. baylands, are downloaded once into a host cache, see docs/CONTAINERS.md)
 #   --no-gui     do not open the Gazebo GUI           --no-map  do not open the live map
-#   --no-markers do not draw the red flown path and yellow halos in the Gazebo GUI (demo/path_markers.py); --show-plan also draws the planned paths
+#   --no-markers do not draw the red flown path in the Gazebo GUI (demo/path_markers.py); --show-plan also draws the planned paths, --halos a yellow halo on each vehicle
 #   --no-prompt  start the flight after a 5 s countdown instead of waiting for Enter
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host
 # (for the GUI) and python3 with matplotlib + Tk (for the map). No sudo.
 # Env: SIDE (square side, default 14 m), ALT (default 6 m), SPEED (default 1.5 m/s)   (leader-follower only; the mesh-dropout plan comes from the YAML)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GUI=1; MAP=1; MARKERS=1; SHOWPLAN=""; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
+GUI=1; MAP=1; MARKERS=1; SHOWPLAN=""; HALOS=""; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
 while [ $# -gt 0 ]; do case "$1" in
-  --no-gui) GUI=0;; --no-map) MAP=0;; --no-markers) MARKERS=0;; --show-plan) SHOWPLAN=1;; --no-prompt) PROMPT=0;;
+  --no-gui) GUI=0;; --no-map) MAP=0;; --no-markers) MARKERS=0;; --show-plan) SHOWPLAN=1;; --halos) HALOS=1;; --no-prompt) PROMPT=0;;
   --world) shift; WORLD="${1:?--world needs a name}";;
   --config) shift; CFG="${1:?--config needs a path}";; --config=*) CFG="${1#--config=}";;
   *) echo "unknown option $1"; exit 2;; esac; shift; done
@@ -97,10 +97,10 @@ if [ $GUI = 1 ]; then
     "${GZENV[@]}" /usr/bin/gz service -s /gui/move_to/pose --reqtype gz.msgs.GUICamera --reptype gz.msgs.Boolean --timeout 2000 \
         --req "pose: {position: {x: $CX, y: $CY, z: $CZ} orientation: {x: $QX, y: $QY, z: $QZ, w: $QW}}" >/dev/null 2>&1 \
         && echo "overview camera set (drag in the GUI to adjust)" || echo "could not set the camera automatically; adjust it by hand"
-    # red planned paths + yellow halo on every vehicle (GUI-side markers only; demo/path_markers.py)
+    # (GUI-side markers only; demo/path_markers.py)
     if [ $MARKERS = 1 ]; then
-      # halos now, then a red line that grows behind each vehicle (stopped when the demo exits); --show-plan adds the planned paths
-      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" --trace "$OUT" ${SHOWPLAN:+--plan} > "$OUT/markers.log" 2>&1 &
+      # a red line that grows behind each vehicle (stopped when the demo exits); --show-plan adds the planned paths
+      "${GZENV[@]}" /usr/bin/python3 "$ROOT/demo/path_markers.py" "$CFG" --trace "$OUT" ${SHOWPLAN:+--plan} ${HALOS:+--halos} > "$OUT/markers.log" 2>&1 &
       MARKPID=$!; echo "drawing each vehicle's flown path in the GUI (red)"
     fi
   fi

@@ -263,6 +263,27 @@ n_lost = sum(1 for e in events if e[3] == "LOST")
 check("every LOST event coincides with a modelled drop below the floor (no unexplained link loss)", not unexplained,
       f"{len(unexplained)} of {n_lost} LOST events unexplained, e.g. {unexplained[:2]}" if unexplained else f"{n_lost} LOST events, all explained")
 
+# full isolation (plans with min_isolation_s > 0): from its own heartbeat log, one agent had EVERY neighbour LOST at the same time
+if plan.get("nominal_isolations"):
+    best = (0.0, None)
+    for n in names:
+        peers = [p for p in names if p != n]
+        state = {p: False for p in peers}                                           # True = LOST
+        t_all = None
+        for t, a, p, ev, _ in events:
+            if a != n:
+                continue
+            state[p] = ev == "LOST"
+            if all(state.values()) and t_all is None:
+                t_all = t
+            elif not all(state.values()) and t_all is not None:
+                if t - t_all > best[0]:
+                    best = (t - t_all, n)
+                t_all = None
+    iso_plan = ", ".join(f"{i['agent']} at plan t={i['t_start_s']:.0f}-{i['t_end_s']:.0f} s" for i in plan["nominal_isolations"])
+    check("one agent had every neighbour LOST at the same time (fully disconnected), measured from its own heartbeats", best[1] is not None,
+          f"{best[1]} for {best[0]:.1f} s (planned: {iso_plan})" if best[1] else f"never (planned: {iso_plan})")
+
 # heartbeat statistics while the links were up
 lat, gaps = [], 0
 for n in names:

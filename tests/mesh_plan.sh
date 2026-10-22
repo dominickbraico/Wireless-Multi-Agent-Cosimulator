@@ -49,6 +49,7 @@ for seed in range(40):
     # independent re-simulation from the plan file's waypoints and times
     pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
     run = {pq: None for pq in pairs}; clear = 0; max_risk = 0; t = 0.0
+    iso = {n: None for n in names}; iso_best = 0.0
     while t <= pl["t_total_s"] + 1e-9:
         xy = {n: pos(pl, n, t - lag) for n in names}; risk = 0
         for a, b in pairs:
@@ -58,8 +59,14 @@ for seed in range(40):
                 run[(a, b)] = run[(a, b)] if run[(a, b)] is not None else t
             elif run[(a, b)] is not None:
                 clear += (t - run[(a, b)]) >= st["min_drop_s"]; run[(a, b)] = None
+        for n in names:                                     # n beyond D + margin from every other agent
+            if all(math.dist((*xy[n], pl["spawn"][n][2] + pl["altitude_m"][n]), (*xy[o], pl["spawn"][o][2] + pl["altitude_m"][o])) > D + m for o in names if o != n):
+                iso[n] = iso[n] if iso[n] is not None else t; iso_best = max(iso_best, t - iso[n])
+            else:
+                iso[n] = None
         max_risk = max(max_risk, risk); t += 0.25
     nev.append(clear)
+    if st.get("min_isolation_s", 0) > 0 and iso_best < st["min_isolation_s"] - 0.25: bad.append((seed, "no agent isolated long enough", iso_best))
     if max_risk > st["max_dropped_links"]: bad.append((seed, "too many links at risk", max_risk))
     if clear < st["min_drop_events"]: bad.append((seed, "too few clear drops", clear))
     c = pl["centre"]; inner, outer = st["roam_radius_m"] + 3.0, st["arena_radius_m"]; arcs = st.get("heading_sectors_deg")
@@ -81,10 +88,17 @@ for seed in range(40):
             k = max(1, int(math.dist(u, v)))
             if not all(allowed((u[0] + (v[0] - u[0]) * i / k, u[1] + (v[1] - u[1]) * i / k)) for i in range(k + 1)): bad.append((seed, n, "leg leaves the allowed area", u, v)); break
     if len(set(pl["altitude_m"].values())) != len(names): bad.append((seed, "altitudes not distinct"))
-check("re-simulated: at most max_dropped_links links at risk at once, at least min_drop_events clear drops, paths start/end at spawn, at speed, inside the allowed area", not bad, str(bad[:2]))
+check("re-simulated: at most max_dropped_links links at risk at once, at least min_drop_events clear drops, one agent fully isolated for min_isolation_s (when set), paths start/end at spawn, at speed, inside the allowed area", not bad, str(bad[:2]))
 check("planner needs few candidates", max(attempts) < 5000, f"max {max(attempts)} candidate plans over 40 seeds, median {sorted(attempts)[20]}; clear drops per plan {min(nev)}..{max(nev)}")
 
 # ------------------------------------------------------------------ excursion
+# The shipped configs lower the Tx power so that a 40 m arena can isolate a drone; the excursion mode (kept as it was tested) needs the
+# larger range of 16 dBm, so its checks run on the same config at 16 dBm.
+def set_tx(node, v):
+    for k, x in node.items():
+        if k == "tx_power_dbm": node[k] = v
+        elif isinstance(x, dict): set_tx(x, v)
+set_tx(base, 16.0); D = linkmodel.dropout_range_m(base)
 print("-- mode excursion")
 x1, x2 = mesh_plan.plan(variant("excursion", 7)), mesh_plan.plan(variant("excursion", 7))
 check("same seed gives an identical plan", x1 == x2)

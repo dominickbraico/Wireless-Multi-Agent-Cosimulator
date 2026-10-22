@@ -29,7 +29,7 @@ logs) and the usual ns-3 and flight logs.
 
 - **Plan** (`orchestrator/mesh_plan.py`, a pure function of the YAML including the seed, so every container computes the same plan): each agent draws random waypoints inside `arena_radius_m` (40 m) of the
   centre of the spawn points, until its path lasts at least `min_flight_s` (default 70 s; the shipped configs set 40 s; at `speed_mps`, 3 m/s), then returns to its spawn point. A candidate set of four paths is kept only if a simulation of the whole
-  flight shows **(1)** never more than `max_dropped_links` (2) links at risk at once, where "at risk" means a 3-D distance above *D* minus `margin_m` (3 m), and **(2)** at least `min_drop_events` (2) clear
+  flight shows **(1)** never more than `max_dropped_links` (default 2; the shipped configs use 3) links at risk at once, where "at risk" means a 3-D distance above *D* minus `margin_m` (3 m), and **(2)** at least `min_drop_events` (2) clear
   drops, where "clear" means a distance above *D* plus the margin for at least `min_drop_s` (6 s). *D* is where the YAML's own signal model reaches the receiver floor (about 51.4 m for the default;
   [SIGNAL_MODEL.md](SIGNAL_MODEL.md)). The simulation lets each vehicle follow its setpoint `tracking_lag_s` (1 s) late. Candidates are drawn from the seed until one qualifies (a median of 10 candidates over
   40 seeds, at most 103; `tests/mesh_plan.sh`). Agent *i* flies at 8 m + 3 m x *i* above its arming point, so paths cannot collide.
@@ -50,7 +50,7 @@ logs) and the usual ns-3 and flight logs.
 ## YAML (`scenario`, see also [CONFIGURATION.md](CONFIGURATION.md))
 
 `scenario.type: mesh_dropout` selects the stack; leader-follower remains the default when the key is absent. Keys under `scenario.mesh_dropout`, all optional, defaults in `orchestrator/mesh_plan.py`
-(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`,
+(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`,
 `min_drop_events`, `min_drop_s`, `min_flight_s`, `end_hold_s`, `tracking_lag_s`, `max_attempts`; excursion mode: `wanderers`, `random_waypoints`, `roam_radius_m`, `excursion_links`, `dwell_s`, `heading_deg`;
 both: `heading_sectors_deg`. The heartbeat QoS is `swarm.qos.peer_state` (default best_effort, volatile, **depth 10**). A plan that cannot be built is rejected with a message (unknown agent or mode, a margin no
 direction allows, no plan with the requested drops within `max_attempts`, ...).
@@ -61,6 +61,7 @@ direction allows, no plan with the requested drops within `max_attempts`, ...).
 |---|---|
 | Flights | every agent reached its altitude, landed and disarmed; was within 2.0 m (horizontal) of its spawn point when its landing began; ended within 5.0 m of it after touchdown |
 | Modelled, roam | at least one link falls below the receiver floor for at least 3 s and recovers; every link is above the floor at the end; never more than `max_dropped_links` links below it at once (from ns-3's `pair_rssi.csv`) |
+| Measured, roam, when `min_isolation_s` > 0 | one agent had every neighbour LOST at the same time, from its own heartbeat log (added 2026-10-21 with the isolation option; fixed before its first run) |
 | Modelled, excursion | links to the planned dropped anchors go below the floor and later recover; every other link never goes below it |
 | Measured (heartbeats) | for every modelled drop lasting at least `link_timeout_s` + 1 s (roam), or every planned dropped link (excursion), in both directions: LOST within [-1.0 s, `link_timeout_s` + 2.0 s] of the modelled drop, then UP within [-1.0 s, 10 s] of the modelled recovery; and every LOST event of the run falls where the model has the signal below the floor |
 | Validity | ns-3 lag within `time.max_lag_ms`; Gazebo real-time factor over 5 s at least `time.min_rtf` from take-off ([ARCHITECTURE.md](ARCHITECTURE.md), "Run validity") |
@@ -87,6 +88,21 @@ retransmissions); that is an observation, not a tested explanation.
 `tests/mesh_plan.sh` passes for both configs, both modes, 40 seeds each: repeatable; an independent re-simulation from the plan files confirms the at-risk limit, the clear drops, paths that start and end at the spawn
 point at the planned speed and stay inside the allowed area; excursions drop exactly *k* links with the margin.
 These are single runs on one machine; they are not statistics.
+
+### Full isolation of one drone (`min_isolation_s`, 2026-10-21)
+
+The shipped configs (`four_agent_mesh_dropout*.yaml`) now set `min_isolation_s: 12`: the planner also requires that at least one agent is beyond *D* + `margin_m` of **all** the
+others at once for that long (all three of its links down), and allows up to 3 links at risk (`max_dropped_links: 3`). To make that reachable inside the 40 m arena the shipped
+configs also lower the transmit power from 16 to 10 dBm, so *D* is 32.4 m instead of 51.4 m (same chain: 10 dBm - 46.68 dB - 30 log10(d) = -82 dBm). The noise floor was not changed:
+the cutoff is the -82 dBm preamble-detection threshold, which sits above noise + 4 dB (-90 dBm), so a lower noise floor would not add disconnections and a higher one would only
+matter above about -86 dBm. Excursion mode needs the larger range; run it with `tx_power_dbm: 16.0` (the offline test does).
+
+| Run | Config, command | Result |
+|---|---|---|
+| Single run, seed 7, 2026-10-21 | `four_agent_mesh_dropout_baylands.yaml`, `demo/run_container_demo.sh --config ... --no-prompt` (GUI, live map) | 36 of 36 checks; plan: agent3 isolated at plan t = 8-21 s (146 candidate plans); measured: agent3 had all three neighbours LOST at once for 14.2 s |
+
+Offline, `tests/mesh_plan.sh` re-simulates 40 seeds: every plan has an isolation of at least 12 s; the planner needed a median of 446 and at most 2157 candidate plans (single-run
+seed 7: 146 on Baylands). The flat config's plan was checked offline only, not flown in containers with these settings.
 
 ## Choices and findings worth knowing
 

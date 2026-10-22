@@ -41,6 +41,8 @@ DEFAULTS = {
     "max_dropped_links": 2,       # roam: never more than this many links at risk of being down at once
     "min_drop_events": 2,         # roam: at least this many clear drops (distance > D + margin for min_drop_s)
     "min_drop_s": 6.0,
+    "min_isolation_s": 0.0,       # roam: if > 0, at least one agent must have EVERY link below the floor (distance > D + margin to all others) this long;
+                                  #       needs max_dropped_links >= number of agents - 1
     "min_flight_s": 70.0,         # roam: each agent's path is at least this long (seconds at speed_mps)
     "end_hold_s": 5.0,            # roam: everyone hovers at home this long before landing
     "tracking_lag_s": 1.0,        # roam: how late a vehicle follows its setpoint (measured: about 1 s)
@@ -88,6 +90,8 @@ def settings(cfg):
     for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s"):
         if not (isinstance(s[k], (int, float)) and s[k] > 0):
             raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
+    if s["mode"] == "roam" and float(s["min_isolation_s"]) > 0 and int(s["max_dropped_links"]) < len(names) - 1:
+        raise ValueError(f"min_isolation_s needs max_dropped_links >= {len(names) - 1} (all of one agent's links are down at once)")
     arcs = s["heading_sectors_deg"]
     if arcs is not None and not (isinstance(arcs, list) and arcs and all(isinstance(a, (list, tuple)) and len(a) == 2 for a in arcs)):
         raise ValueError("scenario.mesh_dropout.heading_sectors_deg must be a list of [from, to] pairs in degrees")
@@ -254,13 +258,17 @@ def _plan_roam(cfg, s):
         pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
         runs = {p: None for p in pairs}
         events, peak, max_risk = [], {p: 0.0 for p in pairs}, 0
+        iso_run, isolations = {n: None for n in names}, []
         t = 0.0
         while t <= t_total + 1e-9:
             xy = {n: at(paths[n], t - lag) for n in names}
             risk = 0
+            far = {n: True for n in names}                  # n is beyond D + margin from every other agent
             for a, b in pairs:
                 d = math.dist((xy[a][0], xy[a][1], spawn[a][2] + alt[a]), (xy[b][0], xy[b][1], spawn[b][2] + alt[b]))
                 risk += d > D - margin
+                if d <= D + margin:
+                    far[a] = far[b] = False
                 if d > D + margin:
                     runs[(a, b)] = (runs[(a, b)] or [t, 0.0])
                     peak[(a, b)] = max(peak[(a, b)], d)
@@ -270,21 +278,32 @@ def _plan_roam(cfg, s):
                         events.append({"pair": [a, b], "t_start_s": round(t0, 2), "t_end_s": round(t, 2), "peak_distance_m": round(peak[(a, b)], 1)})
                     runs[(a, b)] = None; peak[(a, b)] = 0.0
             max_risk = max(max_risk, risk)
+            for n in names:
+                if far[n]:
+                    iso_run[n] = iso_run[n] if iso_run[n] is not None else t
+                elif iso_run[n] is not None:
+                    if t - iso_run[n] >= s["min_isolation_s"] > 0:
+                        isolations.append({"agent": n, "t_start_s": round(iso_run[n], 2), "t_end_s": round(t, 2)})
+                    iso_run[n] = None
             t += dt
-        return max_risk, sorted(events, key=lambda e: e["t_start_s"])
+        for n in names:                                     # an isolation still running at the end of the plan (the agents are home by then, so rare)
+            if iso_run[n] is not None and t - iso_run[n] >= s["min_isolation_s"] > 0:
+                isolations.append({"agent": n, "t_start_s": round(iso_run[n], 2), "t_end_s": round(t, 2)})
+        return max_risk, sorted(events, key=lambda e: e["t_start_s"]), sorted(isolations, key=lambda e: e["t_start_s"])
 
     for attempt in range(1, int(s["max_attempts"]) + 1):
         paths = {n: draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2))) for n in names}
         t_total = max(p[1][-1] for p in paths.values()) + float(s["end_hold_s"])
-        max_risk, events = evaluate(paths, t_total)
-        if max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"]):
+        max_risk, events, isolations = evaluate(paths, t_total)
+        if (max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"])
+                and (s["min_isolation_s"] <= 0 or isolations)):
             break
     else:
         raise ValueError(f"no plan with at most {s['max_dropped_links']} links at risk and {s['min_drop_events']} clear drops in {s['max_attempts']} attempts; "
                          "try a larger arena_radius_m, fewer min_drop_events or a smaller margin_m")
     return {"mode": "roam", "seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s, "altitude_m": alt,
             "spawn": {n: spawn[n] for n in names}, "centre": [centre[0], centre[1]], "attempts": attempt,
-            "t_total_s": round(t_total, 2), "max_links_at_risk": max_risk, "nominal_events": events,
+            "t_total_s": round(t_total, 2), "max_links_at_risk": max_risk, "nominal_events": events, "nominal_isolations": isolations,
             "agents": {n: {"waypoints_enu": [list(p) for p in paths[n][0]], "times_s": [round(t, 2) for t in paths[n][1]],
                            "path_length_m": round(sum(math.dist(u, v) for u, v in zip(paths[n][0], paths[n][0][1:])), 1)} for n in names}}
 
