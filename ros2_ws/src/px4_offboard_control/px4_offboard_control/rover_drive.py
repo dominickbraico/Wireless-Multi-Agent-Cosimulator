@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Drive a PX4 rover around a square and disarm.
+"""PX4 rover control: RoverNode (arming, offboard heartbeat, setpoints, disarming) and RoverDrive, which drives a square and disarms.
 
-The ground-vehicle counterpart of square_trajectory.py: arms in offboard mode, visits the corners North, East, South, West of
-the arming point (offsets in metres, NED: x = North, y = East), and disarms at the start. Parameters: side (m), speed (m/s),
-acceptance_radius (m), px4_instance, log_csv.
+RoverNode is the ground-vehicle counterpart of trajectory_base.TrajectoryNode: it arms in offboard mode, calls `drive_step()` every tick for the
+next target, and disarms when that returns None. RoverDrive (this file, `rover_drive`) visits the corners North, East, South, West of the arming
+point (offsets in metres, NED: x = North, y = East) and ends at the start. Parameters: side (m), speed (m/s), acceptance_radius (m),
+px4_instance, log_csv. mesh_control.mesh_drive is the other subclass.
 
 Control: the generic `TrajectorySetpoint` (position, NED x/y) with only the `position` flag set in OffboardControlMode. At the PX4 commit
 pinned in px4/Dockerfile the rover module turns that into its own `rover_position_setpoint` (DifferentialOffboardMode.cpp, offboardControl():
@@ -31,20 +32,17 @@ from px4_msgs.msg import (
 WARMUP, DRIVE, STOP = 'WARMUP', 'DRIVE', 'STOP'
 
 
-class RoverDrive(Node):
+class RoverNode(Node):
     RATE_HZ = 20.0
     WARMUP_TICKS = 10           # setpoints PX4 must see before it accepts offboard
     RETRY_TICKS = 20            # re-send the mode/arm (or disarm) request once per second
+    DONE_MARKER = 'Route complete and disarmed'     # logged when the vehicle has disarmed after its route (the supervisors wait for it)
 
-    def __init__(self) -> None:
-        super().__init__('rover_drive')
-        self.declare_parameter('side', 6.0)
-        self.declare_parameter('speed', 1.0)
+    def __init__(self, node_name: str) -> None:
+        super().__init__(node_name)
         self.declare_parameter('acceptance_radius', 0.5)     # m; the airframe's own arrival radius (NAV_ACC_RAD) is also 0.5
         self.declare_parameter('px4_instance', 0)            # instance N publishes under /px4_N for N > 0 and uses MAV_SYS_ID N+1
         self.declare_parameter('log_csv', '')
-        self.side = float(self.get_parameter('side').value)
-        self.speed = float(self.get_parameter('speed').value)
         self.accept = float(self.get_parameter('acceptance_radius').value)
         self.instance = int(self.get_parameter('px4_instance').value)
         ns = '' if self.instance == 0 else f'/px4_{self.instance}'
@@ -58,13 +56,10 @@ class RoverDrive(Node):
         self.create_subscription(VehicleLocalPosition, f'{ns}/fmu/out/vehicle_local_position_v1', self._on_position, qos)
         self.create_subscription(VehicleStatus, f'{ns}/fmu/out/vehicle_status_v4', self._on_status, qos)
 
-        s = self.side
-        self.corners = [(s, 0.0), (s, s), (0.0, s), (0.0, 0.0)]          # offsets from the arming point, NED metres
         self.position = None
         self.status = None
         self.home = (0.0, 0.0)
-        self.leg = 0
-        self.carrot = (0.0, 0.0)                                          # the moving setpoint (absolute NED metres)
+        self.leg = 0                                                      # logged in the CSV: which leg or waypoint the route is on
         self._state = WARMUP
         self._tick_count = 0
 
@@ -127,34 +122,66 @@ class RoverDrive(Node):
                 return
             if armed and self.status.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
                 self.home = (px, py)
-                self.carrot = (px, py)
-                self.get_logger().info('Armed in offboard mode, driving the square')
+                self.get_logger().info('Armed in offboard mode')
+                self.on_drive_start(px, py)
                 self._state = DRIVE
             elif self._tick_count % self.RETRY_TICKS == 0:
                 self._command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0)          # custom mode 6 = offboard
                 self._command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
 
         elif self._state == DRIVE:
-            cx, cy = self.corners[self.leg]
-            target = (self.home[0] + cx, self.home[1] + cy)
-            kx, ky = self.carrot
-            d = math.hypot(target[0] - kx, target[1] - ky)
-            step = self.speed / self.RATE_HZ
-            self.carrot = target if d <= step else (kx + (target[0] - kx) / d * step, ky + (target[1] - ky) / d * step)
-            self._setpoint(self.carrot)
-            if self.carrot == target and math.hypot(px - target[0], py - target[1]) <= self.accept:
-                self.get_logger().info(f'Reached corner {self.leg + 1} of {len(self.corners)}')
-                self.leg += 1
-                if self.leg >= len(self.corners):
-                    self._state = STOP
+            target = self.drive_step(px, py)
+            if target is None:
+                self._state = STOP
+            else:
+                self._setpoint(target)
 
         elif self._state == STOP:
             self._setpoint(self.home)
             if not armed:
-                self.get_logger().info('Route complete and disarmed')
+                self.get_logger().info(self.DONE_MARKER)
                 raise SystemExit
             if self._tick_count % self.RETRY_TICKS == 0:
                 self._command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0)
+
+    # Hooks for subclasses ------------------------------------------------
+    def on_drive_start(self, px: float, py: float) -> None:
+        """Called once, when the vehicle is armed in offboard mode. self.home is its local position then (absolute NED metres)."""
+
+    def drive_step(self, px: float, py: float):
+        """Return the absolute NED (north, east) target for this tick, or None when the route is finished. (px, py) is the vehicle's position."""
+        raise NotImplementedError
+
+
+class RoverDrive(RoverNode):
+
+    def __init__(self) -> None:
+        super().__init__('rover_drive')
+        self.declare_parameter('side', 6.0)
+        self.declare_parameter('speed', 1.0)
+        self.side = float(self.get_parameter('side').value)
+        self.speed = float(self.get_parameter('speed').value)
+        s = self.side
+        self.corners = [(s, 0.0), (s, s), (0.0, s), (0.0, 0.0)]          # offsets from the arming point, NED metres
+        self.carrot = (0.0, 0.0)                                          # the moving setpoint (absolute NED metres)
+
+    def on_drive_start(self, px, py) -> None:
+        self.carrot = (px, py)
+        self.get_logger().info('Driving the square')
+
+    def drive_step(self, px, py):
+        cx, cy = self.corners[self.leg]
+        target = (self.home[0] + cx, self.home[1] + cy)
+        kx, ky = self.carrot
+        d = math.hypot(target[0] - kx, target[1] - ky)
+        step = self.speed / self.RATE_HZ
+        self.carrot = target if d <= step else (kx + (target[0] - kx) / d * step, ky + (target[1] - ky) / d * step)
+        if self.carrot == target and math.hypot(px - target[0], py - target[1]) <= self.accept:
+            self.get_logger().info(f'Reached corner {self.leg + 1} of {len(self.corners)}')
+            self.leg += 1
+            if self.leg >= len(self.corners):
+                return None
+        return self.carrot
 
 
 def main(args=None) -> None:

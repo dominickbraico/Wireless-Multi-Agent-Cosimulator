@@ -3,7 +3,8 @@
 
 Selected by `scenario.type: mesh_dropout` in the experiment YAML; the leader-follower flight is the default and is not touched by this file.
 Every agent runs a mesh node (all-to-all heartbeat on the radio, logs which neighbours it hears). Then, once /logs/go exists:
-  mode roam (default): every agent runs mesh_flight role=roam. After take-off each touches /logs/<agent>.airborne; when all have, the first agent's supervisor
+  mode roam (default): every agent runs mesh_flight role=roam (a rover, agents[].vehicle r1_rover, runs mesh_drive instead: it drives the same kind of plan on the ground and
+    touches <agent>.airborne once it is armed and ready). After take-off each touches /logs/<agent>.airborne; when all have, the first agent's supervisor
     touches /logs/mesh_start and every agent flies its own seeded random path on that shared timeline, then lands at its spawn point at the planned end time.
   mode excursion:
     wanderer  mesh_flight role=wander: the seeded random flight of orchestrator/mesh_plan.py, ending at its spawn point and landing
@@ -18,6 +19,7 @@ import time
 import fleet
 import mesh_plan
 import supervise
+import vehicles
 from supervise import file_contains, spawn, wait_for
 
 
@@ -49,9 +51,14 @@ def run(cfg, agent, name, inst, spawn_xy, logs, dds_dir):
 
     lenv = dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST", ROS_DOMAIN_ID="0")
     flight_log = f"{logs}/{name}_flight.log"
-    fargs = ["ros2", "run", "mesh_control", "mesh_flight", "--ros-args", "-p", f"px4_instance:={inst}",
-             "-p", f"altitude:={plan['altitude_m'][name]}", "-p", f"speed:={float(s['speed_mps'])}", "-p", f"spawn_xy:=[{sx},{sy}]",
-             "-p", f"role:={'roam' if roam else 'wander' if wanderer else 'anchor'}", "-p", f"agent_name:={name}", "-p", f"plan_file:={logs}/mesh_plan.json"]
+    rover = vehicles.kind(agent) == "rover"              # a ground vehicle follows its planned path with mesh_drive (roam mode only; mesh_plan.settings enforces it)
+    if rover:
+        fargs = ["ros2", "run", "mesh_control", "mesh_drive", "--ros-args", "-p", f"px4_instance:={inst}", "-p", f"spawn_xy:=[{sx},{sy}]",
+                 "-p", f"agent_name:={name}", "-p", f"plan_file:={logs}/mesh_plan.json", "-p", f"log_csv:={logs}/rover/rover_{name}.csv"]
+    else:
+        fargs = ["ros2", "run", "mesh_control", "mesh_flight", "--ros-args", "-p", f"px4_instance:={inst}",
+                 "-p", f"altitude:={plan['altitude_m'][name]}", "-p", f"speed:={float(s['speed_mps'])}", "-p", f"spawn_xy:=[{sx},{sy}]",
+                 "-p", f"role:={'roam' if roam else 'wander' if wanderer else 'anchor'}", "-p", f"agent_name:={name}", "-p", f"plan_file:={logs}/mesh_plan.json"]
     wanderers = list(plan.get("wanderers", {}))
     if roam:
         fargs += ["-p", f"airborne_file:={logs}/{name}.airborne", "-p", f"start_file:={logs}/mesh_start"]
@@ -69,7 +76,7 @@ def run(cfg, agent, name, inst, spawn_xy, logs, dds_dir):
         else:
             print(f"agent_main[{name}]: not every agent reached its altitude within 600 s; no start signal", flush=True)
 
-    landed = lambda: file_contains(flight_log, "Landed and disarmed")
+    landed = lambda: file_contains(flight_log, "Route complete and disarmed" if rover else "Landed and disarmed")
     if not roam and not wanderer:
         # land once every wanderer is down: the supervisors share /logs, so <wanderer>.done is the signal
         wait_for(lambda: all(os.path.exists(f"{logs}/{w}.done") for w in wanderers), 900)

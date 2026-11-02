@@ -14,10 +14,11 @@ setup(
     zip_safe=True,
     maintainer='Dominick',
     maintainer_email='dominickbraico32@gmail.com',
-    description='Mesh-dropout scenario: heartbeat node and random-flight node',
+    description='Mesh-dropout scenario: heartbeat node, random-flight node (drones) and random-drive node (rovers)',
     license='Apache-2.0',
     entry_points={'console_scripts': [
         'mesh_node = mesh_control.mesh_node:main',
         'mesh_flight = mesh_control.mesh_flight:main',
+        'mesh_drive = mesh_control.mesh_drive:main',
     ]},
 )

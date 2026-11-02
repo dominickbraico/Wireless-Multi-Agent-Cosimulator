@@ -33,6 +33,7 @@ import sys
 import yaml
 
 import linkmodel
+import vehicles
 
 MIN_LEG_M = 3.0                   # roam: no shorter legs, the way home included (the plan's times are rounded to 0.01 s: a leg of a few cm would get a zero duration, one of about 1 m a speed error over 3 %)
 
@@ -55,7 +56,9 @@ DEFAULTS = {
     "wanderers": None,            # default: the last agent in the YAML
     "altitude_base_m": 8.0,
     "altitude_step_m": 3.0,
-    "speed_mps": 3.0,
+    "speed_mps": 3.0,             # multirotors
+    "rover_speed_mps": 1.0,       # roam: ground vehicles (a rover agent has agents[].vehicle: r1_rover); PX4's own limit for the R1 airframe is RO_SPEED_LIM 2 m/s
+    "rover_arena_radius_m": 6.0,  # roam: a rover's waypoints are drawn within this radius of ITS OWN spawn point (it drives on the ground, so the arena is small and local)
     "random_waypoints": 3,
     "roam_radius_m": 20.0,
     "excursion_links": [1, 2],
@@ -92,12 +95,17 @@ def settings(cfg):
     else:
         if int(s["max_dropped_links"]) < 1 or int(s["min_drop_events"]) < 1:
             raise ValueError("max_dropped_links and min_drop_events must be at least 1")
-    for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s"):
+    for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s", "rover_speed_mps", "rover_arena_radius_m"):
         if not (isinstance(s[k], (int, float)) and s[k] > 0):
             raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
+    rovers = [a["name"] for a in cfg["agents"] if vehicles.kind(a) == "rover"]
+    if rovers and s["mode"] != "roam":
+        raise ValueError(f"rovers ({rovers}) are supported in mode roam only")
     if s["excursion_agent"] is not None:
         if s["mode"] != "roam" or s["excursion_agent"] not in names or float(s["min_isolation_s"]) <= 0:
             raise ValueError("excursion_agent must be an agent name, with mode roam and min_isolation_s > 0")
+        if s["excursion_agent"] in rovers:
+            raise ValueError("excursion_agent must be a multirotor: the trip beyond range is flown, and a rover cannot make it at its speed")
         if float(s["excursion_extra_m"]) < 0 or int(s["excursion_pre_waypoints"]) < 0:
             raise ValueError("excursion_extra_m and excursion_pre_waypoints must not be negative")
     if s["mode"] == "roam" and float(s["min_isolation_s"]) > 0 and int(s["max_dropped_links"]) < len(names) - 1:
@@ -202,11 +210,13 @@ def _plan_roam(cfg, s):
     agents = cfg["agents"]
     names = [a["name"] for a in agents]
     spawn = {a["name"]: [float(v) for v in a["spawn_pose"][:3]] for a in agents}
-    alt = {n: s["altitude_base_m"] + s["altitude_step_m"] * i for i, n in enumerate(names)}
+    kinds = {a["name"]: vehicles.kind(a) for a in agents}
+    alt = {n: 0.0 if kinds[n] == "rover" else s["altitude_base_m"] + s["altitude_step_m"] * i for i, n in enumerate(names)}    # rovers stay on the ground
     D = linkmodel.dropout_range_m(cfg)
     if D is None:
         raise ValueError("the configured signal never reaches the receiver floor: there is no dropout to demonstrate")
     margin, speed, lag = float(s["margin_m"]), float(s["speed_mps"]), float(s["tracking_lag_s"])
+    spd = {n: float(s["rover_speed_mps"]) if kinds[n] == "rover" else speed for n in names}
     rng = random.Random(int(s["seed"]))
     centre = (sum(spawn[n][0] for n in names) / len(names), sum(spawn[n][1] for n in names) / len(names))
     inner, outer = float(s["roam_radius_m"]) + 3.0, float(s["arena_radius_m"])
@@ -223,36 +233,50 @@ def _plan_roam(cfg, s):
         th = math.degrees(math.atan2(p[1] - centre[1], p[0] - centre[0])) % 360
         return any((th - lo) % 360 <= ((hi - lo) % 360 or 360) for lo, hi in arcs)
 
-    def leg_ok(a, b, outer=outer):                      # the whole straight leg must stay where flying is allowed
-        n = max(1, int(math.dist(a, b)))
-        return all(allowed((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n), outer) for i in range(n + 1))
+    def area_of(n):
+        """(inside?, centre, radius) of where agent n may go. Multirotors: the shared arena and heading sectors. A rover: a disc around its own spawn point."""
+        if kinds[n] == "rover":
+            h, R = spawn[n], float(s["rover_arena_radius_m"])
+            return (lambda p, o=None: math.hypot(p[0] - h[0], p[1] - h[1]) <= R), (h[0], h[1]), R
+        return allowed, centre, outer
 
-    def draw_point():
+    def leg_ok(a, b, outer=outer, ok=None):             # the whole straight leg must stay where flying is allowed
+        ok = ok or allowed
+        n = max(1, int(math.dist(a, b)))
+        return all(ok((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n), outer) for i in range(n + 1))
+
+    def draw_point(ok=None, c=None, R=None):
+        ok, c, R = ok or allowed, c or centre, R or outer
         for _ in range(10000):
-            r, th = outer * math.sqrt(rng.random()), rng.uniform(0, 2 * math.pi)
-            p = (round(centre[0] + r * math.cos(th), 2), round(centre[1] + r * math.sin(th), 2))
-            if allowed(p):
+            r, th = R * math.sqrt(rng.random()), rng.uniform(0, 2 * math.pi)
+            p = (round(c[0] + r * math.cos(th), 2), round(c[1] + r * math.sin(th), 2))
+            if ok(p):
                 return p
         raise ValueError("arena_radius_m / heading_sectors_deg leave no place to fly")
 
-    def draw_path(home):
+    def draw_path(home, n):
+        ok, c, R = area_of(n)
+        v_n = spd[n]
         for _ in range(1000):
-            pts, length = [home], 0.0
+            pts, length, tries = [home], 0.0, 0
             while True:
-                p = draw_point()
-                if math.dist(pts[-1], p) < MIN_LEG_M or not leg_ok(pts[-1], p):
+                tries += 1
+                if tries > 5000:                         # an arena too small for MIN_LEG_M legs would otherwise loop forever
+                    break
+                p = draw_point(ok, c, R)
+                if math.dist(pts[-1], p) < MIN_LEG_M or not leg_ok(pts[-1], p, ok=ok):
                     continue
                 pts.append(p); length += math.dist(pts[-2], p)
                 back = math.dist(p, home)
-                if (length + back) / speed >= s["min_flight_s"] and back >= MIN_LEG_M and leg_ok(p, home):
+                if (length + back) / v_n >= s["min_flight_s"] and back >= MIN_LEG_M and leg_ok(p, home, ok=ok):
                     pts.append(home)
                     times = [0.0]
                     for u, v in zip(pts, pts[1:]):
-                        times.append(times[-1] + math.dist(u, v) / speed)
+                        times.append(times[-1] + math.dist(u, v) / v_n)
                     return pts, times
                 if len(pts) > 40:
                     break
-        raise ValueError("could not draw a flight path of min_flight_s inside the allowed area")
+        raise ValueError("could not draw a path of min_flight_s inside the allowed area" + (" (rover_arena_radius_m too small for min_flight_s at rover_speed_mps?)" if kinds[n] == "rover" else ""))
 
     def draw_excursion_path(home):
         """Random local waypoints, then out to a point just beyond range of everyone, hold there, then home. The hold is a pair of equal
@@ -327,7 +351,8 @@ def _plan_roam(cfg, s):
         return max_risk, sorted(events, key=lambda e: e["t_start_s"]), sorted(isolations, key=lambda e: e["t_start_s"])
 
     for attempt in range(1, int(s["max_attempts"]) + 1):
-        paths = {n: (draw_excursion_path if n == s["excursion_agent"] else draw_path)((round(spawn[n][0], 2), round(spawn[n][1], 2))) for n in names}
+        paths = {n: (draw_excursion_path((round(spawn[n][0], 2), round(spawn[n][1], 2))) if n == s["excursion_agent"]
+                     else draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2)), n)) for n in names}
         t_total = max(p[1][-1] for p in paths.values()) + float(s["end_hold_s"])
         max_risk, events, isolations = evaluate(paths, t_total)
         if (max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"])
@@ -337,7 +362,7 @@ def _plan_roam(cfg, s):
         raise ValueError(f"no plan with at most {s['max_dropped_links']} links at risk and {s['min_drop_events']} clear drops in {s['max_attempts']} attempts; "
                          "try a larger arena_radius_m, fewer min_drop_events or a smaller margin_m")
     return {"mode": "roam", "seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s, "altitude_m": alt,
-            "spawn": {n: spawn[n] for n in names}, "centre": [centre[0], centre[1]], "attempts": attempt,
+            "kind": kinds, "speed_mps": spd, "spawn": {n: spawn[n] for n in names}, "centre": [centre[0], centre[1]], "attempts": attempt,
             "t_total_s": round(t_total, 2), "max_links_at_risk": max_risk, "nominal_events": events, "nominal_isolations": isolations,
             "agents": {n: {"waypoints_enu": [list(p) for p in paths[n][0]], "times_s": [round(t, 2) for t in paths[n][1]],
                            "path_length_m": round(sum(math.dist(u, v) for u, v in zip(paths[n][0], paths[n][0][1:])), 1)} for n in names}}

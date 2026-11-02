@@ -153,8 +153,8 @@ spawns. For Gazebo both come from PX4's own tree: `x500` is airframe `4001_gz_x5
 swarm DDS domain do not depend on the vehicle.
 
 Adding a vehicle = one entry in `VEHICLES` per simulator that can run it, plus control code for its `kind`. The multirotor scenarios (`leader_follower`, `mesh_dropout`) fly 3-D position
-setpoints and are not valid for rovers; `rover_drive` needs rovers. Not done yet: a rover leader-follower or mesh scenario, mixed fleets (the scenarios
-pick one flight node for everybody), terrain-aware spawn heights (Baylands), and any vehicle for another simulator.
+setpoints and are not valid for rovers; `rover_drive` needs rovers. `mesh_dropout` (roam mode) accepts a mixed fleet: a drone runs `mesh_flight`, a rover `mesh_drive` ([MESH_DROPOUT.md](MESH_DROPOUT.md)). Not done yet: a rover leader-follower scenario, terrain-aware spawn heights
+or ground-level obstacle checks (Baylands), and any vehicle for another simulator.
 
 For Isaac Sim, the vehicle registry is where its differences land: it has no `gz_*` airframes, so each vehicle would need an Isaac entry (a PX4 airframe that suits the interface
 used, plus a USD asset reference) next to its Gazebo one; `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator. Not implemented.

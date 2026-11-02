@@ -92,10 +92,16 @@ else:
           + "; ".join(f"{e['pair'][0]}-{e['pair'][1]} t={e['t_start_s']:.0f}-{e['t_end_s']:.0f} s (peak {e['peak_distance_m']:.0f} m)" for e in plan["nominal_events"]))
 
 # ---- flights ----
+kind = plan.get("kind", {})                                     # older plans have no vehicle kinds: all multirotors
+is_rover = lambda n: kind.get(n) == "rover"
 for n in names:
     t = text(f"{log}/{n}_flight.log")
-    check(f"{n} armed, took off and reached altitude", "Reached altitude" in t)
-    check(f"{n} landed and disarmed", "Landed and disarmed" in t)
+    if is_rover(n):                                             # a ground vehicle: armed in offboard mode, drives, disarms (mesh_control.mesh_drive)
+        check(f"{n} (rover) armed in offboard mode", "Armed in offboard mode" in t)
+        check(f"{n} (rover) completed its route and disarmed", "Route complete and disarmed" in t)
+    else:
+        check(f"{n} armed, took off and reached altitude", "Reached altitude" in t)
+        check(f"{n} landed and disarmed", "Landed and disarmed" in t)
 
 # ---- ground truth: positions with their wall-clock times; the ns-3 <-> wall time map ----
 trk = {i: [] for i in range(len(names))}
@@ -109,9 +115,10 @@ T = {names[i]: np.array(v) for i, v in trk.items() if v}                # column
 ref = T[names[0]]
 ns3_to_wall = lambda t: np.interp(t, ref[:, 1], ref[:, 0])
 def landing_started(n):
-    """Wall-clock time at which this agent's flight node commanded the landing (from its log), or None."""
+    """Wall-clock time at which this agent's flight node commanded the landing, or for a rover announced the end of its route (from its log), or None."""
+    marker = "planned time over: stopping at the spawn point" if is_rover(n) else "Trajectory complete, landing"
     for line in text(f"{log}/{n}_flight.log").splitlines():
-        if "Trajectory complete, landing" in line:
+        if marker in line:
             try:
                 return float(line.split("]")[1].strip(" ["))
             except (IndexError, ValueError):
