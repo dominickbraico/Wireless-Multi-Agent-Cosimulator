@@ -144,6 +144,21 @@ Two limitations to plan for: the `agents[].px4_gz_model` field names a Gazebo mo
 (the adapter can do this itself and only emit agent names); and Gazebo-specific names in `simulators.py` (`px4_flat`, `x500`) are the Gazebo driver's
 business only.
 
+## Vehicle types
+
+`agents[].vehicle` (default `x500`) picks what each agent is. `orchestrator/vehicles.py` holds the registry. A vehicle type is defined **per physics simulator**,
+because two things change independently: the PX4 airframe and model name the agent container starts (`PX4_SYS_AUTOSTART`, `PX4_SIM_MODEL`), and the asset the simulator
+spawns. For Gazebo both come from PX4's own tree: `x500` is airframe `4001_gz_x500`, `r1_rover` is `4009_gz_r1_rover` (the Aion R1, differential drive), spawned as
+`<model>_<px4_instance>`. `kind` (`multirotor`, `rover`) is what control code switches on and does not depend on the simulator. The ns-3 side, the radio and the
+swarm DDS domain do not depend on the vehicle.
+
+Adding a vehicle = one entry in `VEHICLES` per simulator that can run it, plus control code for its `kind`. The multirotor scenarios (`leader_follower`, `mesh_dropout`) fly 3-D position
+setpoints and are not valid for rovers; `rover_drive` needs rovers. Not done yet: a rover leader-follower or mesh scenario, mixed fleets (the scenarios
+pick one flight node for everybody), terrain-aware spawn heights (Baylands), and any vehicle for another simulator.
+
+For Isaac Sim, the vehicle registry is where its differences land: it has no `gz_*` airframes, so each vehicle would need an Isaac entry (a PX4 airframe that suits the interface
+used, plus a USD asset reference) next to its Gazebo one; `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator. Not implemented.
+
 ## Changing the networking technology
 
 "Network technology" is chosen at two levels, both from the experiment YAML. Neither requires editing the orchestrator.

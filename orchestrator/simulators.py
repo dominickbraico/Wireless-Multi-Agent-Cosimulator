@@ -10,6 +10,7 @@ described for each simulator type (`simulator.type` in the experiment YAML):
 Everything else (ns-3, the radio, ROS 2, the swarm protocol) is simulator-independent. Adding a simulator = one entry here
 plus a Dockerfile; see docs/CONTAINERS.md, "Adding a physics simulator (Isaac Sim)".
 """
+import vehicles
 from containers import plan as container_plan
 
 
@@ -34,10 +35,11 @@ def _gazebo_service(cfg, world):
 def _gazebo_px4_env(cfg, agent, world):
     x, y, z, yaw = agent["spawn_pose"]
     p = container_plan(cfg)
+    v = vehicles.for_simulator(agent, "gazebo")         # airframe and model of this agent's vehicle type (default x500)
     return {
         "PX4_GZ_STANDALONE": "1",                       # PX4 attaches to a running Gazebo instead of starting its own
-        "PX4_SYS_AUTOSTART": "4001",
-        "PX4_SIM_MODEL": "gz_x500",
+        "PX4_SYS_AUTOSTART": v["autostart"],
+        "PX4_SIM_MODEL": v["sim_model"],
         "PX4_GZ_WORLD": world,
         "GZ_PARTITION": cfg["simulator"]["gz_partition"],
         "GZ_IP": p["agents"][agent["name"]]["mgmt_ip"],

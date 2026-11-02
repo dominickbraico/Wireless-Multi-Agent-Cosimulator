@@ -25,6 +25,7 @@ import containers
 import fuel
 import simulators
 import technologies
+import vehicles
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 NS3_IMAGE, AGENT_IMAGE = "cosim-ns3", "cosim-agent"
@@ -51,6 +52,7 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
     plan = containers.plan(cfg)
     tech_name, tech = technologies.resolve(cfg)
     sim = simulators.get(cfg)
+    vehicles.check(cfg)                                # vehicle type vs Gazebo model name, before any container starts
     world = sim["world"](cfg, world)
 
     os.makedirs(fuel.cache_dir(), exist_ok=True)       # bind-mount source; created here so Docker does not create it as root
