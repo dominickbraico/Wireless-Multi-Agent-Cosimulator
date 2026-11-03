@@ -66,6 +66,20 @@ Pass criteria (thresholds fixed before the first run; `tools/analyze_rover.py`),
 Run validity as for the leader-follower flight: ns-3 lag within `max_lag_ms`; Gazebo real-time factor within `min_rtf`, measured from the go signal.
 Outputs in the log directory: `rover/rover_<agent>.csv` (PX4 local position), `<agent>_flight.log`, `rover_report.json`.
 
+## Isaac Sim stage A: PX4 attaches to an external MAVLink simulator
+
+Part of the Isaac Sim spike (not implemented as a supported simulator; see [CONTAINERS.md](CONTAINERS.md)). It tests only PX4's side of the
+link, with no GPU and no Isaac Sim: `tests/px4_mavlink_link.sh [--instance N]` starts a stub TCP server (`tools/mavlink_sim_stub.py`) on a fresh
+Docker network and PX4 from the `cosim-px4-runtime` image (PX4 `2fc441493eb887199c279e2eff990f3f4cd0deef`) with `PX4_SIM_MODEL=none_iris` and
+`PX4_SIM_HOST_ADDR` set to the stub. PX4 uses TCP port 4560 + instance (`px4-rc.mavlinksim` in the image).
+
+Criteria, fixed before the first run: the PX4 log contains `Simulator connected on TCP port <4560+N>.`; the stub receives at least 1 byte from PX4;
+the PX4 environment has no `PX4_GZ_*` variable.
+
+Result (2026-11-03, single run per instance, image `sha256:555d8641e877…`): instance 0 (port 4560) and instance 1 (port 4561) both PASS.
+This shows the connection only. The stub sends no sensor data and does not parse MAVLink, so it says nothing about flight, about Pegasus or Isaac Sim
+compatibility, or about timing.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the
