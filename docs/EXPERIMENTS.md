@@ -80,6 +80,22 @@ Result (2026-11-03, single run per instance, image `sha256:555d8641e877…`): in
 This shows the connection only. The stub sends no sensor data and does not parse MAVLink, so it says nothing about flight, about Pegasus or Isaac Sim
 compatibility, or about timing.
 
+## Isaac Sim stage B: Isaac Sim + Pegasus + the pinned PX4, outside the project's stack
+
+Part of the Isaac Sim spike (see above). Criterion, fixed on 2026-11-03 before the first stage B run: with Isaac Sim 5.1.0 (container `nvcr.io/nvidia/isaac-sim:5.1.0`),
+Pegasus Simulator v5.1.0 and PX4 from the `cosim-px4-runtime` image attached over the simulator MAVLink interface, one Iris is armed and taken off by command, and
+within 60 s of the takeoff command both PX4's own local position and the vehicle's height in Isaac Sim have risen by at least 2.0 m above the start. The result is recorded
+below with the exact commands once it exists. If it fails, the failure is reported, not worked around.
+
+Result (2026-11-03, single run, RTX 5060 Ti, driver 580.178.04, Ubuntu 24.04 host): PASS. Isaac Sim 5.1.0 headless with Pegasus Simulator v5.1.0
+(commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`, used unmodified from `PYTHONPATH`; its `pip install -e` was not used because its setup edits Isaac Sim's kit app files) listened on TCP 4560
+(`connection_ip` set to `0.0.0.0`, `px4_autolaunch` false, flat procedural ground plane, no NVIDIA environment asset). PX4 `v1.18.0-beta1-706-g2fc441493e` (the pinned commit; Pegasus' documented
+pairing is PX4 1.14.3) ran in a second container with `PX4_SIM_MODEL=none_iris` and `PX4_SIM_HOST_ADDR` set to the Isaac container, and logged `Simulator connected on TCP port 4560.` and
+`Ready for takeoff!`. After `px4-commander --instance 0 arm` and `takeoff`, the vehicle's height in Isaac went from 0.07 m to 2.0 m within 10 s and settled at about 2.58 m (PX4's default takeoff altitude);
+PX4 reported local z = -2.52 m (NED). Isaac's simulated time over wall time, in 10-s windows over the whole run (including the wait for PX4), was
+min 0.55, median 0.85, max 1.31 (n = 193): this is one run with an empty scene and no sensors, and it shows the real-time factor is not steady at 1.0. PX4 logged 32 `poll timeout` errors
+during start-up while it waited for the first sensor data. Not tested: flight beyond takeoff, several vehicles, ns-3, a rendered scene, sensors.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the
