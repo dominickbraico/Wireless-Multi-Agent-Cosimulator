@@ -147,8 +147,8 @@ business only.
 
 `simulator.type: isaac` runs Isaac Sim 5.1.0 (headless) with Pegasus Simulator v5.1.0 (commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`) in the simulator container, with the
 pinned PX4 in each agent container connected over the simulator MAVLink interface. It exists to find out what Isaac Sim needs; it is not a supported simulator. What is implemented: the
-driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. The pose feed to ns-3 is `adapters/isaac_sim/pose_feed.py`, a thread inside the Isaac process (so it keeps sending when the simulation blocks in lockstep). The real-time factor comes from the pose feed (`tools/analyze_isaac.py`, `tools/timehealth.py rtf_from_poses`; "Isaac Sim stage E" in [EXPERIMENTS.md](EXPERIMENTS.md)); Isaac runs are judged by `analyze_isaac.py`, not `analyze_formation.py`. Not implemented:
-sensors, rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; test: `tests/containers_isaac_ready.sh` ("Isaac Sim stage C" in [EXPERIMENTS.md](EXPERIMENTS.md)).
+driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. The pose feed to ns-3 is `adapters/isaac_sim/pose_feed.py`, a thread inside the Isaac process (so it keeps sending when the simulation blocks in lockstep). The real-time factor comes from the pose feed (`tools/analyze_isaac.py`, `tools/timehealth.py rtf_from_poses`; "Isaac Sim stage E" in [EXPERIMENTS.md](EXPERIMENTS.md)); Isaac runs are judged by `analyze_isaac.py`, not `analyze_formation.py`. A camera stream (`agents[].camera`, `orchestrator/camera_sink.py`, `adapters/isaac_sim/camera_stream.py`) reaches the agent container over the management network as raw frames, not as a ROS 2 topic. Not implemented:
+other sensors, a ROS 2 camera publisher, pacing the simulation to wall time (Isaac's loop runs faster than real time; stage F finding in EXPERIMENTS.md), rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; test: `tests/containers_isaac_ready.sh` ("Isaac Sim stage C" in [EXPERIMENTS.md](EXPERIMENTS.md)).
 
 Requirements (measured on the development machine: Ubuntu 24.04, RTX 5060 Ti, driver 580.178.04):
 - An NVIDIA GPU, the NVIDIA Container Toolkit registered with the Docker engine you use (`docker info` must list an `nvidia` runtime; with Docker Desktop installed, `docker context ls` may point at its
@@ -163,6 +163,7 @@ Facts the implementation depends on:
 - The simulator container is on the internal management network, so it has no internet. Pegasus' `params.py` and Isaac's default ground plane both ask NVIDIA's asset server at start-up and fail offline.
   The scene script answers the first lookup with an empty path and uses a fixed collision box as ground; NVIDIA environments (warehouse, hospital, ...) are therefore unavailable in this setup.
 - Pegasus is used from `PYTHONPATH`, not installed with `pip install -e`: its setup script edits Isaac Sim's kit app files. Features that depend on that edit are unavailable.
+- Rendering offline: some materials are hosted on NVIDIA's asset server and fail to compile in the logs; the scene script adds a light and four coloured posts when an agent has a camera.
 - The first start compiles shaders (about 160 s to the ready state in one run). Nothing is cached between runs.
 
 ## Vehicle types

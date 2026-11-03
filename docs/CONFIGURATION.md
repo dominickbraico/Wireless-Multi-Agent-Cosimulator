@@ -55,6 +55,7 @@ threshold, sensitivity) determine which mechanism limits the range; each corresp
 | `radio_ip`, `mgmt_ip` | Addresses on the emulated radio and on the management network |
 | `px4_instance` | PX4 instance number (`-i N`); also selects the `/px4_N` topic prefix and MAVLink system id N+1 |
 | `vehicle` | Optional, Docker deployment: vehicle type, `x500` (default, multirotor, Gazebo), `r1_rover` (Aion R1 ground vehicle, Gazebo) or `iris` (Pegasus Iris multirotor, Isaac Sim only); see `orchestrator/vehicles.py`. A vehicle with no definition for the chosen `simulator.type` is refused by name. It selects the PX4 airframe and the Gazebo model, and must agree with `px4_gz_model` (checked before anything starts) |
+| `camera` | Optional, `simulator.type: isaac` only (refused otherwise): `{width, height, rate_hz, save_every}`. One Isaac Sim camera on the vehicle, streamed over the management network to the agent container (TCP port 5700 + `px4_instance`, `orchestrator/camera_sink.py`, log `camera_<agent>.csv`); `save_every` N (optional) also saves every Nth frame as a PPM in `camera_<agent>_frames/`. Raw 8-bit RGB, not a ROS 2 topic (no publisher exists yet). See "Isaac Sim stage F" in [EXPERIMENTS.md](EXPERIMENTS.md) |
 | `px4_gz_model` | Gazebo model name the pose bridge tracks: `<model>_<px4_instance>` of the vehicle type (`x500_<instance>`, `r1_rover_<instance>`) |
 | `spawn_pose` | `[x, y, z, yaw]`: where PX4 spawns the vehicle (world frame, metres) |
 | `antenna_offset` | Antenna position relative to the model origin (default `[0, 0, 0]`) |

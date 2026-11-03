@@ -65,6 +65,8 @@ def check(cfg):
     sim = cfg["simulator"]["type"]
     for a in cfg["agents"]:
         v = for_simulator(a, sim)
+        if a.get("camera") and sim != "isaac":
+            raise SystemExit(f"agent {a['name']}: `camera` is only implemented for simulator.type isaac (this is {sim})")
         if sim == "gazebo":
             want = f"{v['model']}_{a['px4_instance']}"
             if a.get("px4_gz_model") != want:

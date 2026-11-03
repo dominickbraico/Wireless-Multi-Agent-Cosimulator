@@ -57,6 +57,10 @@ if lift is None:
     print(f"run not certified: the vehicle never rose 0.3 m above its resting height ({z0:.2f} m), so there is no flight window to judge")
     ok_all = False
 else:
+    fv = [v for t, v in samples if t >= lift]
+    if fv:      # information, no criterion: the check above only rejects runs that are too slow; Isaac Sim's loop is not paced to wall time
+        print(f"RTF flight window (information): mean {sum(fv) / len(fv):.3f}, median {sorted(fv)[len(fv) // 2]:.3f}, max single sample {max(fv):.2f}; values above 1 mean "
+              f"simulated time ran faster than wall time")
     fl = rtf_check(samples, lift, t_last, rmin, win)
     check(f"RTF flight window {win:g}-s sliding mean >= {rmin}", fl["ok"],
           f"worst window mean {fl['worst_window_mean']:.3f}, worst sample {fl['worst_sample']:.2f}, {fl['n']} samples, flight {t_last - lift:.1f} s" if fl["n"] else "no samples")

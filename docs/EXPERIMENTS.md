@@ -135,7 +135,27 @@ Results (2026-11-03, single runs):
 - Cross-check of the method on the Gazebo regression run (`tests/containers_leader_follower.sh`): pose-derived median 1.000, worst 5-s mean 0.997, single samples 0.80 to 1.20; Gazebo's own `/stats` factor: median 1.000, worst 5-s mean 1.000.
   The pose-derived value agrees on the sliding mean and is noisier per sample.
 - The earlier stage B whole-run figures (median 0.85, min 0.55 over 10-s windows) were measured differently, over a run that included the wait for PX4; they are not comparable with the flight-window figure.
-These figures are for an empty scene with no sensors; stage F adds a camera.
+These figures are for an empty scene with no sensors; stage F adds a camera. The flight-window mean factor of the measured stage E run was 1.158 (not stated above): the figures show a lower bound being met, not real-time pacing (see the stage F finding).
+
+## Isaac Sim stage F: camera path
+
+Experimental. One Isaac Sim camera on the vehicle (`agents[].camera`, Isaac only), streamed over the management network to the agent container and never over the emulated radio. `tests/isaac_camera_path.sh` with
+`config/experiments/isaac_camera.yaml` (camera 320 x 240 at 15 Hz configured). Criteria, fixed on 2026-11-03 before the first run (the owner accepted these thresholds): (F1) at the agent container's receiver the average
+frame rate between arming and the end of the flight window is at least 10 frames/s; (F2) each frame has `width x height x 3` bytes and at least 90 % of frames are not constant (the standard deviation of a byte sample > 1.0); (F3) the ns-3 pcap
+holds frames (so the check is not vacuous) and none to or from TCP port 5700 + `px4_instance`; (F4) the flight-window real-time factor, judged by `tools/analyze_isaac.py`, stays at or above `time.min_rtf` (0.95) with the camera on. Part A of the
+test checks the frame protocol and receiver (`orchestrator/camera_sink.py`) without Docker. The measured frame rate and real-time factor with the camera are reported next to the stage E figure without a camera.
+
+Results (2026-11-03, two single runs, same hardware and versions as stage C; `COSIM_ACCEPT_ISAAC_EULA=Y tests/isaac_camera_path.sh`, the second with `save_every: 100` added to the config): all checks PASS in both. Part A (protocol and receiver) passes.
+- F1: 16.9 frames/s (766 frames in 45.2 s) and 15.6 frames/s (706 frames in 45.2 s) at the receiver, against 15 Hz configured in simulated time. A rate above the configured one is expected when simulated time runs faster than wall time (next point). Frames
+  rendered before the receiver was connected are dropped (run 1: sequence numbers 1 to 74 missing at the start). Each frame is 230 400 bytes, so the stream is about 3.6 MB/s.
+- F2: all frames 320 x 240 x 3 bytes, 100 % not constant. Saved frames (run 2, converted to PNG and looked at) show the lit scene: a red post, grey ground, horizon and sky. The offline simulator container logs MDL material compile errors for materials
+  hosted on NVIDIA's asset server (observed names `Linen_Blue`, `Carpet_Gray`); the frames above show no sign of them, but material realism offline is not established.
+- F3: the pcap held 9 frames and none on TCP port 5700. This is a weak check: the stream is on the management network by construction and the radio was nearly idle (one agent).
+- F4 (flight-window worst 5-s mean of the real-time factor, criterion 0.95): run 1 0.986, run 2 0.952. Run 2 passed by 0.002; the run-to-run difference is larger than any difference between runs with and without the camera (stage E, no camera, one run: 0.975).
+  At this resolution and rate no camera penalty is visible in single runs; none can be excluded.
+- **Finding, not a criterion: Isaac Sim's simulation is not paced to wall time.** In the flight window the mean factor was 1.12 (run 1) and 1.03 (run 2); the stage E run without a camera had a mean of 1.16 and 5-s means up to 1.62. Gazebo is held at 1.000 by its own
+  setting. A factor above 1 means vehicle dynamics advance faster than the wall-clock ROS 2 nodes and ns-3 expect, which the validity check (a lower bound only) does not catch. `tools/analyze_isaac.py` now prints the flight-window mean as information. Pacing the loop
+  to wall time, or an upper bound on the factor, is not implemented and would need its own criterion.
 
 ## Demo with the Gazebo GUI
 
