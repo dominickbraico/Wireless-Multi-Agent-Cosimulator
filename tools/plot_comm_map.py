@@ -196,7 +196,7 @@ def draw_panel(ax, cfg, names, pos, tracks, t, norm, floor, curved, rssi_of, lab
     arc = 0.15 * np.ptp(xy[:, 1]) if use_arcs else 0.0   # collinear agents: the arcs bulge sideways
     ax.set_xlim(allp[:, 0].min() - pad - arc, allp[:, 0].max() + pad + arc)
     ax.set_ylim(allp[:, 1].min() - pad, allp[:, 1].max() + pad)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal", adjustable="box")        # "datalim" would rewrite the limits at draw time and could crop an agent (it did: a rover 0.3 m past the edge)
     ax.set_xlabel("x east (m)")
     ax.set_ylabel("y north (m)")
     ax.grid(True, color="#e8eaed", lw=0.6)

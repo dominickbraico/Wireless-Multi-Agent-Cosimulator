@@ -47,10 +47,26 @@ logs) and the usual ns-3 and flight logs.
 `roam_radius_m` on the excursion heading, the **excursion point** where it hovers `dwell_s` (10 s), back through the outbound point, more random points, home, land. The excursion point is chosen so that exactly
 *k* anchor links (1 or 2, from `excursion_links` and the seed) end more than `margin_m` beyond *D* and the others more than `margin_m` inside it. The anchors land once every wanderer has landed.
 
+## Mixed fleet: drones and rovers (roam mode only)
+
+An agent with `vehicle: r1_rover` ([CONTAINERS.md](CONTAINERS.md), "Vehicle types") is a ground vehicle (the Aion R1 in Gazebo). The planner treats it differently from a drone:
+
+- **Speed and arena.** It moves at `rover_speed_mps` (default 1.0) and draws its waypoints within `rover_arena_radius_m` (default 6.0) of its **own** spawn point, not within the shared arena, with the same minimum leg
+  (3 m) and `min_flight_s`. It has no altitude (0) and ignores `heading_sectors_deg`.
+- **Excursion.** The `excursion_agent` must be a drone: the trip beyond range is flown, and at 1 m/s a rover would need about 25 s each way. A plan with rovers needs `mode: roam`.
+- **Control.** `mesh_control/mesh_drive.py` follows the planned path on the same shared timeline as the drones (it touches `<agent>.airborne` when armed and ready, then waits for `mesh_start`). It sends PX4's
+  generic offboard position setpoint, moving at the planned speed ([rover_drive.py](../ros2_ws/src/px4_offboard_control/px4_offboard_control/rover_drive.py) explains why).
+- **Checks.** The pass criteria below apply unchanged, except the flight row: a rover is checked for arming in offboard mode, completing its route and disarming, and for being within 2.0 m of its spawn point
+  when its route ended (5.0 m after it disarmed). Distances in the model are 3-D with the rover at its spawn height.
+
+`config/experiments/drone_rover_mesh_baylands.yaml` is the shipped example: a drone (agent1, the excursion agent) and a rover (agent2) in Baylands, 7.1 m apart, Tx power 4 dBm (dropout at 20.5 m).
+`tests/mesh_plan.sh --config` it checks the plans for 40 seeds (mode excursion is skipped for rovers). Not known: whether the ground within the rover's arena is free of obstacles anywhere but near the spawn point; the
+Baylands world has structures, and the planner has no ground-level obstacle map. A run reports it as a failure if the rover stops short.
+
 ## YAML (`scenario`, see also [CONFIGURATION.md](CONFIGURATION.md))
 
 `scenario.type: mesh_dropout` selects the stack; leader-follower remains the default when the key is absent. Keys under `scenario.mesh_dropout`, all optional, defaults in `orchestrator/mesh_plan.py`
-(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`, `excursion_agent`, `excursion_extra_m`, `excursion_pre_waypoints`,
+(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `rover_speed_mps`, `rover_arena_radius_m`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`, `excursion_agent`, `excursion_extra_m`, `excursion_pre_waypoints`,
 `min_drop_events`, `min_drop_s`, `min_flight_s`, `end_hold_s`, `tracking_lag_s`, `max_attempts`; excursion mode: `wanderers`, `random_waypoints`, `roam_radius_m`, `excursion_links`, `dwell_s`, `heading_deg`;
 both: `heading_sectors_deg`. The heartbeat QoS is `swarm.qos.peer_state` (default best_effort, volatile, **depth 10**). A plan that cannot be built is rejected with a message (unknown agent or mode, a margin no
 direction allows, no plan with the requested drops within `max_attempts`, ...).
@@ -111,6 +127,14 @@ Offline, `tests/mesh_plan.sh` re-simulates 40 seeds for both configs: every plan
 a median of 75-81 and at most 324 candidate plans. Legs shorter than 3 m (the way home included) are rejected: the plan's times are rounded to 0.01 s, so a leg of about 1 m would have a
 speed error over 3 % and a few centimetres a zero duration. The flat config was not flown in containers with these settings.
 
+### Drone and rover in Baylands (2026-11-02, seed 7, single run)
+
+`tests/containers_mesh_dropout.sh --config config/experiments/drone_rover_mesh_baylands.yaml` (agent1 a drone and the excursion agent, agent2 an R1 rover, Tx 4 dBm, D = 20.5 m; Gazebo without the GUI): all checks passed.
+The plan was found on the first candidate (flight 47 s; planned drop of the one link at plan t = 13 to 34 s, peak 34 m). Measured: the drone was fully disconnected for 21.9 s; both heartbeat directions logged LOST
+1.1 and 1.2 s after the modelled drop and UP -0.1 and +0.1 s around the modelled recovery; the drone ended 0.05 m and the rover 0.41 m from their spawn points; ns-3 lag at most 0.44 ms; worst 5-s real-time-factor window 1.000.
+From the ground-truth poses: the drone flew 67 m (planned 65.6 m) and reached 22.7 m from its spawn point; the rover drove 32 m of the planned 42.4 m and got at most 5.2 m from its spawn point, so it cuts corners
+(the setpoint moves along the plan, the vehicle's own path controller smooths it). The comparison with the plan's length is not a criterion. Only this seed was flown; the plans of 40 seeds were checked offline.
+
 ## Choices and findings worth knowing
 
 - **Heartbeat history depth.** `PeerState` has no key, so a subscriber keeps one shared keep-last history for all senders. With depth 1 the first run saw agent4 miss 1 to 3 s of agent1's heartbeats throughout the flight,
@@ -131,4 +155,4 @@ speed error over 3 % and a few centimetres a zero duration. The flat config was 
 ## Limits
 
 Seed 7 is the only seed flown in the containers (the planners are checked for 40 seeds per mode). Excursion mode was flown with one wanderer. The scenario uses the Wi-Fi model of the YAML unchanged, so the dropout range is the
-one set by the log-distance model and the receiver floor, not a measured one. Not run: a world other than the flat one and Baylands, native (non-Docker) execution, more than four agents.
+one set by the log-distance model and the receiver floor, not a measured one. Not run: a world other than the flat one and Baylands, native (non-Docker) execution, more than four agents, more than one rover, a rover in the live demo with the Gazebo GUI.

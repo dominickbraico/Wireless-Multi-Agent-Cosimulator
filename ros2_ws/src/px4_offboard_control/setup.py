@@ -24,6 +24,7 @@ setup(
             'survey_trajectory = px4_offboard_control.survey_trajectory:main',
             'circle_trajectory = px4_offboard_control.circle_trajectory:main',
             'follower_flight = px4_offboard_control.follower_flight:main',
+            'rover_drive = px4_offboard_control.rover_drive:main',
         ],
     },
 )
