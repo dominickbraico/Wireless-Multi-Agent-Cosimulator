@@ -110,7 +110,7 @@ simulator container is therefore "physics engine + its pose adapter", and its co
 
 ## Adding a physics simulator (Isaac Sim)
 
-Only Gazebo has a container driver today. A new simulator needs these four pieces; nothing in ns-3, the agents' ROS 2 code or the swarm protocol changes.
+Gazebo has the supported container driver; Isaac Sim has an experimental one ("Isaac Sim (spike, experimental)" below). A new simulator needs these four pieces; nothing in ns-3, the agents' ROS 2 code or the swarm protocol changes.
 
 | Piece | What to provide |
 |---|---|
@@ -134,15 +134,36 @@ bridge adds `antenna_offset`). `t_sim` is simulation time, `t_wall` the sender's
 is the reference; the encoding is isolated in its `encode()`.
 
 **The vehicle link** is simulator-specific and is the part that needs thought. Gazebo's gz-transport reaches PX4 directly over `mgmt`
-(`PX4_GZ_STANDALONE`). Isaac Sim does not use gz-transport. A likely route (not verified here) is PX4's MAVLink simulator interface (lockstep over TCP, one port
-per instance) as used by Isaac Sim extensions such as Pegasus Simulator, which would need a different PX4 start-up (a non-Gazebo `PX4_SIM_MODEL`
-and the simulator's TCP port) in `px4_env()`. The agent containers, the swarm node and ns-3 are unaffected. This has not been implemented or tested.
+(`PX4_GZ_STANDALONE`). Isaac Sim does not use gz-transport. The route used by the Isaac spike is PX4's MAVLink simulator interface (TCP, one port per instance, 4560 + `px4_instance`) as implemented by Pegasus Simulator, with a non-Gazebo `PX4_SIM_MODEL`
+and the simulator's address set in `px4_env()`; the agent containers, the swarm node and ns-3 are unaffected. Tested for one multirotor to PX4-ready only (see the Isaac section below).
 
 Steps: add the Dockerfile, add the registry entry (and the `px4_env()` that attaches PX4), write the adapter so it satisfies the pose contract, set
 `simulator.type: isaac` in a copy of an experiment YAML, then run `python3 orchestrator/cosim.py build` and a test.
 Two limitations to plan for: the `agents[].px4_gz_model` field names a Gazebo model, so another simulator needs its own mapping from scene object to agent name
 (the adapter can do this itself and only emit agent names); and Gazebo-specific names in `simulators.py` (`px4_flat`, `x500`) are the Gazebo driver's
 business only.
+
+## Isaac Sim (spike, experimental)
+
+`simulator.type: isaac` runs Isaac Sim 5.1.0 (headless) with Pegasus Simulator v5.1.0 (commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`) in the simulator container, with the
+pinned PX4 in each agent container connected over the simulator MAVLink interface. It exists to find out what Isaac Sim needs; it is not a supported simulator. What is implemented: the
+driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. Not implemented: the pose feed to ns-3,
+Isaac's real-time-factor check, sensors, rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; test: `tests/containers_isaac_ready.sh` ("Isaac Sim stage C" in [EXPERIMENTS.md](EXPERIMENTS.md)).
+
+Requirements (measured on the development machine: Ubuntu 24.04, RTX 5060 Ti, driver 580.178.04):
+- An NVIDIA GPU, the NVIDIA Container Toolkit registered with the Docker engine you use (`docker info` must list an `nvidia` runtime; with Docker Desktop installed, `docker context ls` may point at its
+  separate engine instead of the host engine). The generator stops with a message naming the toolkit if the runtime is missing.
+- The base image `nvcr.io/nvidia/isaac-sim:5.1.0` (22.9 GB unpacked), which needs a free NVIDIA NGC account and `docker login nvcr.io`. Pull it once; later builds and runs use the local copy.
+- You accept NVIDIA's Omniverse licence agreement yourself by setting `COSIM_ACCEPT_ISAAC_EULA=Y` in the environment of `cosim.py build`/`up` and the tests; nothing sets it for you. `COSIM_ISAAC_PRIVACY_CONSENT`
+  (default `N`) is passed to Isaac Sim as `PRIVACY_CONSENT`.
+- Pegasus supports multirotors only (its README and vehicle page, checked 2026-11-03), so a rover has no Isaac definition and is refused.
+
+Facts the implementation depends on:
+- PX4 attaches with `PX4_SIM_MODEL=none_iris` and `PX4_SIM_HOST_ADDR=<simulator IP>`, connecting out to TCP 4560 + `px4_instance`; Pegasus listens there (`connection_ip` set to `0.0.0.0`; its default `localhost` is unreachable from another container).
+- The simulator container is on the internal management network, so it has no internet. Pegasus' `params.py` and Isaac's default ground plane both ask NVIDIA's asset server at start-up and fail offline.
+  The scene script answers the first lookup with an empty path and uses a fixed collision box as ground; NVIDIA environments (warehouse, hospital, ...) are therefore unavailable in this setup.
+- Pegasus is used from `PYTHONPATH`, not installed with `pip install -e`: its setup script edits Isaac Sim's kit app files. Features that depend on that edit are unavailable.
+- The first start compiles shaders (about 160 s to the ready state in one run). Nothing is cached between runs.
 
 ## Vehicle types
 
@@ -157,7 +178,7 @@ setpoints and are not valid for rovers; `rover_drive` needs rovers. `mesh_dropou
 or ground-level obstacle checks (Baylands), and any vehicle for another simulator.
 
 For Isaac Sim, the vehicle registry is where its differences land: it has no `gz_*` airframes, so each vehicle would need an Isaac entry (a PX4 airframe that suits the interface
-used, plus a USD asset reference) next to its Gazebo one; `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator. Not implemented.
+used, plus a USD asset reference) next to its Gazebo one; `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator. Only the multirotor `iris` has an Isaac entry (experimental); there is no rover for Isaac Sim.
 
 ## Changing the networking technology
 
@@ -287,4 +308,4 @@ that model in `gz model --list`; no flight was run on it.
   discovery, IGMP) off the emulated channel.
 - The agents' flight DDS path still uses `radio0`'s address over loopback ([ARCHITECTURE.md](ARCHITECTURE.md), Limitations). That limitation is documented
   for the native setup; it has not been tested what stopping the `ns3` container mid-flight does to the agents.
-- Isaac Sim is a documented extension, not an implemented one.
+- Isaac Sim is an experimental spike, not a supported simulator (see "Isaac Sim (spike, experimental)").

@@ -37,7 +37,7 @@ Editing a YAML never requires rebuilding ns-3: the file is read each time ns-3 s
 | `containers` | Optional, Docker deployment only: `ns3_mgmt_ip`, `link_subnet_base` (below) |
 | `swarm.qos.leader_state`, `swarm.qos.peer_state` | Optional: DDS QoS of the radio-side topics `/swarm/leader_state` (leader-follower) and `/mesh/peer_state` (mesh dropout) (below). Default `best_effort`, `volatile`, depth 1 (10 for `peer_state`) |
 | `scenario` | Optional: `type` (`leader_follower`, the default, `mesh_dropout` or `rover_drive`) and, for the latter, the `mesh_dropout` keys (`mode`: `roam`, every agent flies, or `excursion`, one wanderer; seed, speed, arena, margins, `heading_sectors_deg`, `min_isolation_s` (one agent out of range of all others for this long; 0 = off), `excursion_agent` (the agent that makes the trip out of range), `excursion_extra_m`, `rover_speed_mps`, `rover_arena_radius_m` (agents with `vehicle: r1_rover`), ...): see [MESH_DROPOUT.md](MESH_DROPOUT.md); or `rover_drive` (every agent a rover; keys `rover_drive.side_m`, `speed_mps`, `acceptance_radius_m`: see "Rover drive test" in [EXPERIMENTS.md](EXPERIMENTS.md)) |
-| `simulator` | `type`, `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name` |
+| `simulator` | `type` (`gazebo`, or `isaac`: experimental spike, see "Isaac Sim (spike)" in [CONTAINERS.md](CONTAINERS.md)); for Gazebo `world`, `world_name`, `pose_topic`, `gz_partition`, `px4_world_name`; for Isaac `world_name` (a label only: the scene is a fixed ground box) |
 
 The receiver parameters in `network.wifi.phy` (noise figure, preamble-detection minimum RSSI and SNR, CCA energy-detect
 threshold, sensitivity) determine which mechanism limits the range; each corresponds to a measurable hardware quantity.
@@ -54,7 +54,7 @@ threshold, sensitivity) determine which mechanism limits the range; each corresp
 | `name` | Agent name; the namespace is `ns-<name>` |
 | `radio_ip`, `mgmt_ip` | Addresses on the emulated radio and on the management network |
 | `px4_instance` | PX4 instance number (`-i N`); also selects the `/px4_N` topic prefix and MAVLink system id N+1 |
-| `vehicle` | Optional, Docker deployment: vehicle type, `x500` (default, multirotor) or `r1_rover` (Aion R1 ground vehicle); see `orchestrator/vehicles.py`. It selects the PX4 airframe and the Gazebo model, and must agree with `px4_gz_model` (checked before anything starts) |
+| `vehicle` | Optional, Docker deployment: vehicle type, `x500` (default, multirotor, Gazebo), `r1_rover` (Aion R1 ground vehicle, Gazebo) or `iris` (Pegasus Iris multirotor, Isaac Sim only); see `orchestrator/vehicles.py`. A vehicle with no definition for the chosen `simulator.type` is refused by name. It selects the PX4 airframe and the Gazebo model, and must agree with `px4_gz_model` (checked before anything starts) |
 | `px4_gz_model` | Gazebo model name the pose bridge tracks: `<model>_<px4_instance>` of the vehicle type (`x500_<instance>`, `r1_rover_<instance>`) |
 | `spawn_pose` | `[x, y, z, yaw]`: where PX4 spawns the vehicle (world frame, metres) |
 | `antenna_offset` | Antenna position relative to the model origin (default `[0, 0, 0]`) |

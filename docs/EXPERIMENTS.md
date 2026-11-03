@@ -89,12 +89,25 @@ below with the exact commands once it exists. If it fails, the failure is report
 
 Result (2026-11-03, single run, RTX 5060 Ti, driver 580.178.04, Ubuntu 24.04 host): PASS. Isaac Sim 5.1.0 headless with Pegasus Simulator v5.1.0
 (commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`, used unmodified from `PYTHONPATH`; its `pip install -e` was not used because its setup edits Isaac Sim's kit app files) listened on TCP 4560
-(`connection_ip` set to `0.0.0.0`, `px4_autolaunch` false, flat procedural ground plane, no NVIDIA environment asset). PX4 `v1.18.0-beta1-706-g2fc441493e` (the pinned commit; Pegasus' documented
+(`connection_ip` set to `0.0.0.0`, `px4_autolaunch` false, Isaac's default ground plane, which is loaded from NVIDIA's asset server: this run's container had internet access; corrected 2026-11-03, an earlier version of this text called it procedural). PX4 `v1.18.0-beta1-706-g2fc441493e` (the pinned commit; Pegasus' documented
 pairing is PX4 1.14.3) ran in a second container with `PX4_SIM_MODEL=none_iris` and `PX4_SIM_HOST_ADDR` set to the Isaac container, and logged `Simulator connected on TCP port 4560.` and
 `Ready for takeoff!`. After `px4-commander --instance 0 arm` and `takeoff`, the vehicle's height in Isaac went from 0.07 m to 2.0 m within 10 s and settled at about 2.58 m (PX4's default takeoff altitude);
 PX4 reported local z = -2.52 m (NED). Isaac's simulated time over wall time, in 10-s windows over the whole run (including the wait for PX4), was
 min 0.55, median 0.85, max 1.31 (n = 193): this is one run with an empty scene and no sensors, and it shows the real-time factor is not steady at 1.0. PX4 logged 32 `poll timeout` errors
 during start-up while it waited for the first sensor data. Not tested: flight beyond takeoff, several vehicles, ns-3, a rendered scene, sensors.
+
+## Isaac Sim stage C: the `isaac` simulator driver
+
+Experimental (see [CONTAINERS.md](CONTAINERS.md), "Isaac Sim (spike, experimental)"). `COSIM_ACCEPT_ISAAC_EULA=Y tests/containers_isaac_ready.sh` with `config/experiments/isaac_one_agent.yaml`
+(images first: `python3 orchestrator/cosim.py build --config config/experiments/isaac_one_agent.yaml`). Criteria, fixed before the first run on 2026-11-03: (1) a vehicle with no Isaac definition (`r1_rover`)
+is refused with its name; (2) without an `nvidia` runtime the generator stops with a message naming the NVIDIA Container Toolkit; (3) without `COSIM_ACCEPT_ISAAC_EULA=Y` it stops with a message naming the variable;
+(4) the generated Compose file reserves a GPU for the simulator service and for no other service, and the simulator service has no `GZ_` variable; (5) `cosim up` brings the stack up (simulator, ns-3 and
+agent1 healthy) and agent1 reports PX4 ready; (6) PX4's start-up log shows no `PX4_GZ_` variable.
+
+Result (2026-11-03, single run, Isaac Sim 5.1.0 + Pegasus v5.1.0, RTX 5060 Ti, driver 580.178.04, image `cosim-sim-isaac` built from `nvcr.io/nvidia/isaac-sim:5.1.0`): all six checks PASS.
+Two earlier runs failed and led to fixes recorded in [CONTAINERS.md](CONTAINERS.md): the simulator container's offline network made Pegasus' import and Isaac's default ground plane fail. In the passing run agent1's PX4 logged
+`Simulator connected on TCP port 4560.` to the simulator at the management address and `Ready for takeoff!`. This shows start-up only: the vehicle was not flown, no pose reached ns-3, and the real-time factor was not measured.
+The Gazebo path was re-run after the change: `tests/containers_leader_follower.sh` (default config, single run) passed all checks (p95 formation error 1.79 m, 0 % swarm loss, RTF worst window 1.000).
 
 ## Demo with the Gazebo GUI
 

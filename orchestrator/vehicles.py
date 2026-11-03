@@ -10,7 +10,7 @@ A vehicle type is described once per physics simulator, because the two change i
 `kind` is what the control code switches on (a multirotor takes off and flies 3-D setpoints; a rover drives 2-D position
 setpoints and never leaves the ground). It does not depend on the simulator.
 
-Only `gazebo` entries exist. The airframes below (`4001_gz_x500`, `4009_gz_r1_rover`) are PX4's Gazebo-bridge airframes; another
+Only `gazebo` entries exist, plus one `isaac` entry (`iris`, spike). The airframes below (`4001_gz_x500`, `4009_gz_r1_rover`) are PX4's Gazebo-bridge airframes; another
 simulator needs its own `autostart`/`sim_model` and asset reference under its own key (docs/CONTAINERS.md, "Adding a physics
 simulator"). Asking for a vehicle on a simulator with no entry stops with a message instead of guessing.
 """
@@ -20,6 +20,13 @@ VEHICLES = {
     "x500": {
         "kind": "multirotor",
         "gazebo": {"autostart": "4001", "sim_model": "gz_x500", "model": "x500"},
+    },
+    # 3DR Iris as shipped with Pegasus Simulator (Isaac Sim extension, multirotors only). PX4 runs the generic external-simulator airframe
+    # 10016_none_iris (PX4_SIM_MODEL=none_iris) and reaches Isaac Sim over the simulator MAVLink interface (TCP 4560 + px4_instance), not gz-transport.
+    # `asset` names the Pegasus ROBOTS key. Isaac Sim spike: experimental, one vehicle, no rover (docs/CONTAINERS.md).
+    "iris": {
+        "kind": "multirotor",
+        "isaac": {"sim_model": "none_iris", "asset": "Iris"},
     },
     # Aion Robotics R1 rover: PX4 airframe 4009_gz_r1_rover (differential drive) and PX4's `r1_rover` Gazebo model, both in the
     # pinned PX4 commit (px4/Dockerfile). The airframe sets the rover's tuning; the real vehicle's own parameters will differ.

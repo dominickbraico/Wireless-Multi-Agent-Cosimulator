@@ -84,9 +84,11 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
                             "HOME": os.path.expanduser("~")},      # so Gazebo resolves Fuel models to the host's paths (fuel.py)
             "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro",
                                      f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"],   # Fuel models, at the host's own path (fuel.py)
-            "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": 60},
+            "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": s.get("healthcheck_retries", 60)},
             "stop_grace_period": "10s",
         }
+        if s.get("gpu"):                                # the one service that needs the NVIDIA runtime (Isaac Sim)
+            services["simulator"]["deploy"] = {"resources": {"reservations": {"devices": [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}]}}}
 
     ns3_nets = {mgmt_net: {"ipv4_address": plan["mgmt"]["ns3_ip"]}}
     for name, p in plan["agents"].items():
