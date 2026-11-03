@@ -15,6 +15,7 @@ Log files use the names of the native scripts (<agent>_px4.log, swarm_<agent>.lo
 tools/analyze_formation.py reads a container run unchanged.
 """
 import os
+import subprocess
 import sys
 import time
 
@@ -23,6 +24,7 @@ import yaml
 import fleet
 import simulators
 import supervise
+import vehicles
 from supervise import file_contains, spawn, wait_for
 
 LOGS = "/logs"
@@ -60,7 +62,18 @@ def main():
     spawn([XRCE, "udp4", "-p", "8888"], f"{LOGS}/{name}_xrce.log", env=xenv, label="xrce")
     spawn([f"{PX4_BUILD}/bin/px4", "-i", str(inst), "-d", f"{PX4_BUILD}/etc"], f"{LOGS}/{name}_px4.log", env=penv, cwd=wd, label="px4")
     px4_log = f"{LOGS}/{name}_px4.log"
-    if not wait_for(lambda: file_contains(px4_log, "Ready for takeoff") or supervise.died(), 240):
+    def px4_ready():
+        """PX4 prints "Ready for takeoff!" only for rotary- and fixed-wing vehicles (Commander::checkAndInformReadyForTakeoff, SITL builds), never
+        for a rover, so a rover is asked directly: `commander check` answers "Preflight check: OK" when every arming check passes."""
+        if vehicles.kind(agent) == "multirotor":
+            return file_contains(px4_log, "Ready for takeoff")
+        try:
+            r = subprocess.run([f"{PX4_BUILD}/bin/px4-commander", "--instance", str(inst), "check"], cwd=wd, env=penv, capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            return False
+        return "Preflight check: OK" in r.stdout + r.stderr
+
+    if not wait_for(lambda: px4_ready() or supervise.died(), 240, period=1.0):
         print(f"agent_main[{name}]: PX4 not ready within 240 s", flush=True)
         supervise.stop_all()
     if supervise.died():
@@ -73,8 +86,11 @@ def main():
     if scenario == "mesh_dropout":                       # a different flight; everything above (PX4, XRCE) is shared
         import scenario_mesh
         return scenario_mesh.run(cfg, agent, name, inst, (sx, sy), LOGS, DDS)
+    if scenario == "rover_drive":                        # ground vehicles: PX4 stack above is shared, the drive is its own node
+        import scenario_rover
+        return scenario_rover.run(cfg, agent, name, inst, LOGS)
     if scenario != "leader_follower":
-        print(f"agent_main[{name}]: unknown scenario.type '{scenario}' (leader_follower, mesh_dropout)", flush=True)
+        print(f"agent_main[{name}]: unknown scenario.type '{scenario}' (leader_follower, mesh_dropout, rover_drive)", flush=True)
         supervise.stop_all()
 
     # swarm node: the only process on the radio domain

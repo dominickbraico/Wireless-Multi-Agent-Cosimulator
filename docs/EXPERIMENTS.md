@@ -48,6 +48,24 @@ Pass criteria: every vehicle reaches altitude; the leader lands; each follower h
 lands when the link goes away; no domain-0, XRCE or PX4-topic traffic and only domain-42 traffic on the channel; ns-3 lag within
 `max_lag_ms`; Gazebo real-time factor within `min_rtf` (see ARCHITECTURE.md, "Run validity", for the window). Formation error is measured against Gazebo ground truth.
 
+## Rover drive test
+
+`tests/containers_rover.sh [--config YAML]` (default `config/experiments/rover_two_agent.yaml`; images first: `python3 orchestrator/cosim.py build`)
+starts the Docker deployment with two Aion R1 rovers (`agents[].vehicle: r1_rover`; PX4 airframe `4009_gz_r1_rover`, Gazebo model `r1_rover`, both in the
+PX4 commit pinned in `px4/Dockerfile`). Each rover arms in offboard mode, drives a 6 m square from its spawn point at 1 m/s using PX4's generic offboard position setpoint
+(a moving target at the set speed; why not the rover-specific setpoint: the docstring of `rover_drive.py`), and disarms (`scenario.type: rover_drive`; `orchestrator/scenario_rover.py`, `ros2_ws/.../rover_drive.py`). The two squares are 6 m apart. It checks the vehicle in Gazebo,
+not the radio: no swarm traffic is sent, and ns-3 only receives the poses.
+
+Pass criteria (thresholds fixed before the first run; `tools/analyze_rover.py`), per rover:
+
+- it armed in offboard mode, reached all four corners and disarmed;
+- PX4's own position passed within 0.75 m of every corner;
+- the Gazebo ground truth (poses applied in ns-3) passed within 1.0 m of every corner and ended within 1.5 m of the spawn point;
+- ground-truth z varied by at most 0.35 m while driving (not flipped or airborne).
+
+Run validity as for the leader-follower flight: ns-3 lag within `max_lag_ms`; Gazebo real-time factor within `min_rtf`, measured from the go signal.
+Outputs in the log directory: `rover/rover_<agent>.csv` (PX4 local position), `<agent>_flight.log`, `rover_report.json`.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the

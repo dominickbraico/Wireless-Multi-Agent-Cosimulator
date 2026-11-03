@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Offline checks of the mesh-dropout flight plans (orchestrator/mesh_plan.py). No Docker, no ROS, no simulator: seconds.
-#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands YAML too)
+#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands and drone_rover_mesh_baylands YAMLs too)
 # Both modes, 40 seeds each.
 #   roam      (every agent flies): plans are repeatable and differ between seeds; the flight is re-simulated here from the plan file alone (independently of the
 #             planner): never more than max_dropped_links links at risk at once, at least min_drop_events clear drops, every path starts and ends at its spawn,
-#             lasts at least min_flight_s at speed_mps, stays inside the allowed area (arena and heading sectors), and the agents' altitudes differ
+#             lasts at least min_flight_s at the agent's speed (speed_mps, or rover_speed_mps for a rover), stays inside the allowed area (arena and heading sectors; a rover:
+#             rover_arena_radius_m around its own spawn point), and the drones' altitudes differ (a rover's is 0)
 #   excursion (one wanderer): the excursion drops exactly the planned number of anchor links with the planned margin, random points keep all links up, the path
 #             ends at the spawn point, headings stay in the allowed sectors
 # plus: bad YAML values are rejected.
@@ -45,7 +46,8 @@ def pos(pl, n, t):
 bad, attempts, nev = [], [], []
 for seed in range(40):
     pl = mesh_plan.plan(variant("roam", seed)); st = pl["settings"]; names = list(pl["agents"]); attempts.append(pl["attempts"])
-    m, lag, speed = pl["margin_m"], st["tracking_lag_s"], st["speed_mps"]
+    m, lag = pl["margin_m"], st["tracking_lag_s"]
+    kind, spd = pl.get("kind", {}), pl.get("speed_mps", {})                       # per-agent vehicle kind and speed (rovers: rover_speed_mps)
     # independent re-simulation from the plan file's waypoints and times
     pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
     run = {pq: None for pq in pairs}; clear = 0; max_risk = 0; t = 0.0
@@ -86,17 +88,36 @@ for seed in range(40):
         if pl["t_total_s"] < ts[-1] + st["end_hold_s"] - 1e-6: bad.append((seed, n, "end time too early"))
         for (u, v), (t0_, t1_) in zip(zip(ws, ws[1:]), zip(ts, ts[1:])):
             hold = n == xa and math.dist(u, v) < 1e-9                      # the excursion agent waits at its excursion point
-            if not hold and abs(math.dist(u, v) / (t1_ - t0_) - speed) > 0.05: bad.append((seed, n, "leg not at speed_mps")); break
+            if not hold and abs(math.dist(u, v) / (t1_ - t0_) - spd.get(n, st["speed_mps"])) > 0.05: bad.append((seed, n, "leg not at the agent's speed")); break
             k = max(1, int(math.dist(u, v)))
             lim = r_out + 1.0 if n == xa else outer
-            if not all(allowed((u[0] + (v[0] - u[0]) * i / k, u[1] + (v[1] - u[1]) * i / k), lim) for i in range(k + 1)): bad.append((seed, n, "leg leaves the allowed area", u, v)); break
+            if kind.get(n) == "rover":                                  # a rover stays within rover_arena_radius_m of its own spawn point
+                ok_pt = lambda q: math.dist(q, sp) <= st["rover_arena_radius_m"] + 1e-6
+            else:
+                ok_pt = lambda q: allowed(q, lim)
+            if not all(ok_pt((u[0] + (v[0] - u[0]) * i / k, u[1] + (v[1] - u[1]) * i / k)) for i in range(k + 1)): bad.append((seed, n, "leg leaves the allowed area", u, v)); break
         if n == xa:
             far = max(math.dist(w, c) for w in ws)
             if abs(far - r_out) > 0.05: bad.append((seed, n, "excursion point not at D + margin + excursion_extra_m", far, r_out))
             if max(ts[i + 1] - ts[i] for i in range(len(ts) - 1)) < st["min_isolation_s"]: bad.append((seed, n, "hold shorter than min_isolation_s"))
-    if len(set(pl["altitude_m"].values())) != len(names): bad.append((seed, "altitudes not distinct"))
+    flyers = [n for n in names if kind.get(n) != "rover"]
+    if len({pl["altitude_m"][n] for n in flyers}) != len(flyers): bad.append((seed, "altitudes not distinct"))
+    if any(pl["altitude_m"][n] != 0 for n in names if kind.get(n) == "rover"): bad.append((seed, "a rover has an altitude"))
+    if kind.get(xa) == "rover": bad.append((seed, "the excursion agent is a rover"))
 check("re-simulated: at most max_dropped_links links at risk at once, at least min_drop_events clear drops, one agent fully isolated for min_isolation_s (when set), paths start/end at spawn, at speed, inside the allowed area", not bad, str(bad[:2]))
 check("planner needs few candidates", max(attempts) < 5000, f"max {max(attempts)} candidate plans over 40 seeds, median {sorted(attempts)[20]}; clear drops per plan {min(nev)}..{max(nev)}")
+
+# ------------------------------------------------------------------ mixed fleets
+if any(a.get("vehicle") == "r1_rover" for a in base["agents"]):
+    print("-- mixed fleet: mode excursion is not available with rovers, so its checks are skipped; the rejections are checked instead")
+    rover = [a["name"] for a in base["agents"] if a.get("vehicle") == "r1_rover"][0]
+    for kw, label in (({"mode": "excursion"}, "mode excursion with a rover"), ({"excursion_agent": rover}, "a rover as the excursion agent"),
+                      ({"rover_speed_mps": -1}, "negative rover speed"), ({"rover_arena_radius_m": 0.5, "max_attempts": 50}, "a rover arena too small for min_flight_s")):
+        try:
+            mesh_plan.plan(variant(**{"mode": "roam", **kw})); check(f"rejects {label}", False, "no error")
+        except ValueError:
+            check(f"rejects {label}", True)
+    print("ALL PASS" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
 
 # ------------------------------------------------------------------ excursion
 # The shipped configs lower the Tx power so that a 40 m arena can isolate a drone; the excursion mode (kept as it was tested) needs the
