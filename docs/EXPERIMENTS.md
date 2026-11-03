@@ -109,6 +109,18 @@ Two earlier runs failed and led to fixes recorded in [CONTAINERS.md](CONTAINERS.
 `Simulator connected on TCP port 4560.` to the simulator at the management address and `Ready for takeoff!`. This shows start-up only: the vehicle was not flown, no pose reached ns-3, and the real-time factor was not measured.
 The Gazebo path was re-run after the change: `tests/containers_leader_follower.sh` (default config, single run) passed all checks (p95 formation error 1.79 m, 0 % swarm loss, RTF worst window 1.000).
 
+## Isaac Sim stage D: pose feed to ns-3
+
+Experimental (see [CONTAINERS.md](CONTAINERS.md), "Isaac Sim (spike, experimental)"). `COSIM_ACCEPT_ISAAC_EULA=Y tests/isaac_pose_feed.sh` with `config/experiments/isaac_one_agent.yaml`. Part A, without Docker, tests
+`adapters/isaac_sim/pose_feed.py` against the pose-feed contract: (A1) datagrams are JSON with exactly the keys `seq`, `t_sim`, `t_wall`, `agents`, and positions equal the stored position plus `antenna_offset`; (A2) the rate is the
+configured one within +-30 %, `seq` rises by 1, `t_wall` does not decrease; (A3) after 1.5 s without an update the last pose keeps being sent at the same rate and `t_wall` keeps advancing; (A4) a new position is sent after the
+next update. Part B runs the stack, arms agent1's PX4 and sends `takeoff`: (B1) the antenna z in `ns3/pose_applied.csv` rises, from its mean before arming to its maximum, by `MIS_TAKEOFF_ALT` (read from PX4) +-0.5 m; (B2) no gap
+longer than 1.0 s between consecutive applied samples after arming. Criteria fixed before the first run on 2026-11-03.
+
+Result (2026-11-03, single run, same hardware and versions as stage C): all checks PASS. B1: rise 2.52 m for `MIS_TAKEOFF_ALT` 2.50 m (resting antenna z 0.16 m); B2: longest gap 0.02 s over 2272 applied samples. The first full run failed
+B1 because the test read `MIS_TAKEOFF_ALT` wrongly (plain `param show` prints nothing for a parameter that is not yet in use; `param show -q` prints the value); the criterion was not changed. This shows that Isaac Sim's vehicle position reaches ns-3
+and follows a takeoff. It does not show that the Isaac world frame and ns-3's frame agree beyond the origin and axes assumed in `vehicle_sim.py`, and the real-time factor was not measured.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the

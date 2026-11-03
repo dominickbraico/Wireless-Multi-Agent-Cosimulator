@@ -147,7 +147,7 @@ business only.
 
 `simulator.type: isaac` runs Isaac Sim 5.1.0 (headless) with Pegasus Simulator v5.1.0 (commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`) in the simulator container, with the
 pinned PX4 in each agent container connected over the simulator MAVLink interface. It exists to find out what Isaac Sim needs; it is not a supported simulator. What is implemented: the
-driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. Not implemented: the pose feed to ns-3,
+driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. The pose feed to ns-3 is `adapters/isaac_sim/pose_feed.py`, a thread inside the Isaac process (so it keeps sending when the simulation blocks in lockstep). Not implemented:
 Isaac's real-time-factor check, sensors, rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; test: `tests/containers_isaac_ready.sh` ("Isaac Sim stage C" in [EXPERIMENTS.md](EXPERIMENTS.md)).
 
 Requirements (measured on the development machine: Ubuntu 24.04, RTX 5060 Ti, driver 580.178.04):

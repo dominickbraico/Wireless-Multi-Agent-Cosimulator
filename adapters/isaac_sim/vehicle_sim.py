@@ -7,7 +7,9 @@ For every agent in the YAML (vehicle type from orchestrator/vehicles.py, `isaac`
 MAVLink server on TCP 4560 + px4_instance on all interfaces: PX4 connects out to it (PX4_SIM_HOST_ADDR, orchestrator/simulators.py). Pegasus waits
 for PX4's first heartbeat inside its step, so the simulation steps from the start. /logs/.isaac_ready is written after the first steps (the container health check).
 Scene: a fixed box as ground (no NVIDIA asset: the container's network has no internet). Multirotors only: Pegasus has no other vehicle types.
-Modelling note: Isaac Sim's world frame is taken as East-North-Up with the origin ns-3 uses, as for Gazebo (docs/CONTAINERS.md, pose feed). Pose feed: not yet here.
+Pose feed: adapters/isaac_sim/pose_feed.py, a thread in this process sending each vehicle's position plus `antenna_offset` to ns-3 at network.pose.rate_hz.
+Modelling note: Isaac Sim's world frame is taken as East-North-Up with the origin ns-3 uses, as for Gazebo (docs/CONTAINERS.md, pose feed): the vehicles are spawned at `spawn_pose`
+in that frame and Pegasus reports positions in it. Nothing here checks that frame against anything else.
 """
 import argparse
 import os
@@ -21,6 +23,8 @@ args = ap.parse_args()
 cfg = yaml.safe_load(open(args.config))
 
 import vehicles                                              # orchestrator/ is on PYTHONPATH (isaac-entrypoint.sh)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pose_feed
 
 from isaacsim import SimulationApp
 simulation_app = SimulationApp({"headless": True})          # must follow the import directly (Pegasus examples)
@@ -50,6 +54,10 @@ world = pg.world
 from isaacsim.core.api.objects import FixedCuboid
 FixedCuboid(prim_path="/World/ground", name="ground", position=[0.0, 0.0, -0.1], scale=[400.0, 400.0, 0.2])
 
+pose = cfg["network"]["pose"]
+sender = pose_feed.PoseSender((pose["listen_addr"], int(pose["port"])), pose["rate_hz"], {a["name"]: a["antenna_offset"] for a in cfg["agents"]})
+drones = {}                                                   # agent name -> Pegasus vehicle
+
 for a in cfg["agents"]:
     v = vehicles.for_simulator(a, "isaac")
     if vehicles.kind(a) != "multirotor":
@@ -65,15 +73,18 @@ for a in cfg["agents"]:
         "px4_dir": "/tmp",
         "px4_vehicle_model": v["sim_model"],
     }))]
-    Multirotor(f"/World/{a['name']}", ROBOTS[v["asset"]], int(a["px4_instance"]), [x, y, z],
+    drones[a["name"]] = Multirotor(f"/World/{a['name']}", ROBOTS[v["asset"]], int(a["px4_instance"]), [x, y, z],
                Rotation.from_euler("XYZ", [0.0, 0.0, yaw], degrees=True).as_quat(), config=mc)
 
 world.reset()
 timeline.play()
 print(f"vehicle_sim: {len(cfg['agents'])} vehicle(s) spawned, waiting for PX4", flush=True)
 steps = 0
+sender.start()
 while simulation_app.is_running():
     world.step(render=False)
     steps += 1
+    for name, drone in drones.items():
+        sender.update(name, drone.state.position, world.current_time)
     if steps == 20:
         open(f"{LOGS}/.isaac_ready", "w").close()
