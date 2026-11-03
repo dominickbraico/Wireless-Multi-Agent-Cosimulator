@@ -121,6 +121,22 @@ Result (2026-11-03, single run, same hardware and versions as stage C): all chec
 B1 because the test read `MIS_TAKEOFF_ALT` wrongly (plain `param show` prints nothing for a parameter that is not yet in use; `param show -q` prints the value); the criterion was not changed. This shows that Isaac Sim's vehicle position reaches ns-3
 and follows a takeoff. It does not show that the Isaac world frame and ns-3's frame agree beyond the origin and axes assumed in `vehicle_sim.py`, and the real-time factor was not measured.
 
+## Isaac Sim stage E: real-time factor of an Isaac Sim run
+
+Experimental. Isaac Sim has no equivalent of Gazebo's `/stats` topic, so `tools/timehealth.py rtf_from_poses` takes the factor from the pose feed: simulated seconds (`t_sim`, Isaac's `world.current_time`) over wall seconds
+(`t_wall_apply_s`, when ns-3 applied the pose) across 5 consecutive applied samples. The feed repeats the last pose while the simulator is blocked, so a stall counts as factor 0. `tools/analyze_isaac.py <log dir> <yaml>` judges a run:
+the criterion is the `time.rtf_window_s` sliding mean against `time.min_rtf` over the flight window (from the first sample whose antenna z is 0.3 m above the median z of the first 10 s, to the last sample); the whole stream
+(from 5 s after the first sample) is printed for information; a run with no pose samples or no flight is "run not certified". `tests/timehealth_isaac.sh [--logs DIR]` tests the function on synthetic streams (real time gives 1.0, half speed 0.5,
+a 2-s stall gives 0 and fails the sliding mean, too few samples give none) and the analyzer on a real run directory. Criteria fixed before the first run on 2026-11-03; they test that a number is produced correctly, not that Isaac meets `min_rtf`.
+
+Results (2026-11-03, single runs):
+- `tests/timehealth_isaac.sh --logs <stage D run>`: all checks PASS. The measured run (one Iris, empty scene, no sensors, RTX 5060 Ti, taking off to 2.5 m): flight window (40.3 s) worst 5-s mean 0.975 (>= `min_rtf` 0.95), worst single sample 0.68; whole stream
+  worst 5-s mean 0.731 (includes start-up and the wait for PX4); ns-3 lag at most 1.687 ms (limit 10 ms).
+- Cross-check of the method on the Gazebo regression run (`tests/containers_leader_follower.sh`): pose-derived median 1.000, worst 5-s mean 0.997, single samples 0.80 to 1.20; Gazebo's own `/stats` factor: median 1.000, worst 5-s mean 1.000.
+  The pose-derived value agrees on the sliding mean and is noisier per sample.
+- The earlier stage B whole-run figures (median 0.85, min 0.55 over 10-s windows) were measured differently, over a run that included the wait for PX4; they are not comparable with the flight-window figure.
+These figures are for an empty scene with no sensors; stage F adds a camera.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the
