@@ -66,6 +66,101 @@ Pass criteria (thresholds fixed before the first run; `tools/analyze_rover.py`),
 Run validity as for the leader-follower flight: ns-3 lag within `max_lag_ms`; Gazebo real-time factor within `min_rtf`, measured from the go signal.
 Outputs in the log directory: `rover/rover_<agent>.csv` (PX4 local position), `<agent>_flight.log`, `rover_report.json`.
 
+## Isaac Sim stage A: PX4 attaches to an external MAVLink simulator
+
+Part of the Isaac Sim spike (not implemented as a supported simulator; see [CONTAINERS.md](CONTAINERS.md)). It tests only PX4's side of the
+link, with no GPU and no Isaac Sim: `tests/px4_mavlink_link.sh [--instance N]` starts a stub TCP server (`tools/mavlink_sim_stub.py`) on a fresh
+Docker network and PX4 from the `cosim-px4-runtime` image (PX4 `2fc441493eb887199c279e2eff990f3f4cd0deef`) with `PX4_SIM_MODEL=none_iris` and
+`PX4_SIM_HOST_ADDR` set to the stub. PX4 uses TCP port 4560 + instance (`px4-rc.mavlinksim` in the image).
+
+Criteria, fixed before the first run: the PX4 log contains `Simulator connected on TCP port <4560+N>.`; the stub receives at least 1 byte from PX4;
+the PX4 environment has no `PX4_GZ_*` variable.
+
+Result (2026-11-03, single run per instance, image `sha256:555d8641e877…`): instance 0 (port 4560) and instance 1 (port 4561) both PASS.
+This shows the connection only. The stub sends no sensor data and does not parse MAVLink, so it says nothing about flight, about Pegasus or Isaac Sim
+compatibility, or about timing.
+
+## Isaac Sim stage B: Isaac Sim + Pegasus + the pinned PX4, outside the project's stack
+
+Part of the Isaac Sim spike (see above). Criterion, fixed on 2026-11-03 before the first stage B run: with Isaac Sim 5.1.0 (container `nvcr.io/nvidia/isaac-sim:5.1.0`),
+Pegasus Simulator v5.1.0 and PX4 from the `cosim-px4-runtime` image attached over the simulator MAVLink interface, one Iris is armed and taken off by command, and
+within 60 s of the takeoff command both PX4's own local position and the vehicle's height in Isaac Sim have risen by at least 2.0 m above the start. The result is recorded
+below with the exact commands once it exists. If it fails, the failure is reported, not worked around.
+
+Result (2026-11-03, single run, RTX 5060 Ti, driver 580.178.04, Ubuntu 24.04 host): PASS. Isaac Sim 5.1.0 headless with Pegasus Simulator v5.1.0
+(commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`, used unmodified from `PYTHONPATH`; its `pip install -e` was not used because its setup edits Isaac Sim's kit app files) listened on TCP 4560
+(`connection_ip` set to `0.0.0.0`, `px4_autolaunch` false, Isaac's default ground plane, which is loaded from NVIDIA's asset server: this run's container had internet access; corrected 2026-11-03, an earlier version of this text called it procedural). PX4 `v1.18.0-beta1-706-g2fc441493e` (the pinned commit; Pegasus' documented
+pairing is PX4 1.14.3) ran in a second container with `PX4_SIM_MODEL=none_iris` and `PX4_SIM_HOST_ADDR` set to the Isaac container, and logged `Simulator connected on TCP port 4560.` and
+`Ready for takeoff!`. After `px4-commander --instance 0 arm` and `takeoff`, the vehicle's height in Isaac went from 0.07 m to 2.0 m within 10 s and settled at about 2.58 m (PX4's default takeoff altitude);
+PX4 reported local z = -2.52 m (NED). Isaac's simulated time over wall time, in 10-s windows over the whole run (including the wait for PX4), was
+min 0.55, median 0.85, max 1.31 (n = 193): this is one run with an empty scene and no sensors, and it shows the real-time factor is not steady at 1.0. PX4 logged 32 `poll timeout` errors
+during start-up while it waited for the first sensor data. Not tested: flight beyond takeoff, several vehicles, ns-3, a rendered scene, sensors.
+
+## Isaac Sim stage C: the `isaac` simulator driver
+
+Experimental (see [CONTAINERS.md](CONTAINERS.md), "Isaac Sim (spike, experimental)"). `COSIM_ACCEPT_ISAAC_EULA=Y tests/containers_isaac_ready.sh` with `config/experiments/isaac_one_agent.yaml`
+(images first: `python3 orchestrator/cosim.py build --config config/experiments/isaac_one_agent.yaml`). Criteria, fixed before the first run on 2026-11-03: (1) a vehicle with no Isaac definition (`r1_rover`)
+is refused with its name; (2) without an `nvidia` runtime the generator stops with a message naming the NVIDIA Container Toolkit; (3) without `COSIM_ACCEPT_ISAAC_EULA=Y` it stops with a message naming the variable;
+(4) the generated Compose file reserves a GPU for the simulator service and for no other service, and the simulator service has no `GZ_` variable; (5) `cosim up` brings the stack up (simulator, ns-3 and
+agent1 healthy) and agent1 reports PX4 ready; (6) PX4's start-up log shows no `PX4_GZ_` variable.
+
+**Criterion change, 2026-11-04 (whole-branch review):** check 6 as written could not fail, because PX4 does not print its environment to its log. It now reads the environment of the running `px4` process from `/proc` in agent1 and requires `PX4_SIM_MODEL=none_iris` and no `PX4_GZ_*` variable (6a, 6b). Check 7 was added: a `camera` block without a positive `width`, `height` or `rate_hz` is refused with a message naming `camera.<key>` (offline). Checks 1 to 5 are unchanged. Re-run on 2026-11-04 (single run, same hardware and versions): all checks, including 6a, 6b and 7, PASS. The 2026-11-03 result below for check 6 therefore rested on the old form.
+
+Result (2026-11-03, single run, Isaac Sim 5.1.0 + Pegasus v5.1.0, RTX 5060 Ti, driver 580.178.04, image `cosim-sim-isaac` built from `nvcr.io/nvidia/isaac-sim:5.1.0`): all six checks PASS.
+Two earlier runs failed and led to fixes recorded in [CONTAINERS.md](CONTAINERS.md): the simulator container's offline network made Pegasus' import and Isaac's default ground plane fail. In the passing run agent1's PX4 logged
+`Simulator connected on TCP port 4560.` to the simulator at the management address and `Ready for takeoff!`. This shows start-up only: the vehicle was not flown, no pose reached ns-3, and the real-time factor was not measured.
+The Gazebo path was re-run after the change: `tests/containers_leader_follower.sh` (default config, single run) passed all checks (p95 formation error 1.79 m, 0 % swarm loss, RTF worst window 1.000).
+
+## Isaac Sim stage D: pose feed to ns-3
+
+Experimental (see [CONTAINERS.md](CONTAINERS.md), "Isaac Sim (spike, experimental)"). `COSIM_ACCEPT_ISAAC_EULA=Y tests/isaac_pose_feed.sh` with `config/experiments/isaac_one_agent.yaml`. Part A, without Docker, tests
+`adapters/isaac_sim/pose_feed.py` against the pose-feed contract: (A1) datagrams are JSON with exactly the keys `seq`, `t_sim`, `t_wall`, `agents`, and positions equal the stored position plus `antenna_offset`; (A2) the rate is the
+configured one within +-30 %, `seq` rises by 1, `t_wall` does not decrease; (A3) after 1.5 s without an update the last pose keeps being sent at the same rate and `t_wall` keeps advancing; (A4) a new position is sent after the
+next update. Part B runs the stack, arms agent1's PX4 and sends `takeoff`: (B1) the antenna z in `ns3/pose_applied.csv` rises, from its mean before arming to its maximum, by `MIS_TAKEOFF_ALT` (read from PX4) +-0.5 m; (B2) no gap
+longer than 1.0 s between consecutive applied samples after arming. Criteria fixed before the first run on 2026-11-03.
+
+Result (2026-11-03, single run, same hardware and versions as stage C): all checks PASS. B1: rise 2.52 m for `MIS_TAKEOFF_ALT` 2.50 m (resting antenna z 0.16 m); B2: longest gap 0.02 s over 2272 applied samples. The first full run failed
+B1 because the test read `MIS_TAKEOFF_ALT` wrongly (plain `param show` prints nothing for a parameter that is not yet in use; `param show -q` prints the value); the criterion was not changed. This shows that Isaac Sim's vehicle position reaches ns-3
+and follows a takeoff. It does not show that the Isaac world frame and ns-3's frame agree beyond the origin and axes assumed in `vehicle_sim.py`, and the real-time factor was not measured.
+
+## Isaac Sim stage E: real-time factor of an Isaac Sim run
+
+Experimental. Isaac Sim has no equivalent of Gazebo's `/stats` topic, so `tools/timehealth.py rtf_from_poses` takes the factor from the pose feed: simulated seconds (`t_sim`, Isaac's `world.current_time`) over wall seconds
+(`t_wall_apply_s`, when ns-3 applied the pose) across 5 consecutive applied samples. The feed repeats the last pose while the simulator is blocked, so a stall counts as factor 0. `tools/analyze_isaac.py <log dir> <yaml>` judges a run:
+the criterion is the `time.rtf_window_s` sliding mean against `time.min_rtf` over the flight window (from the first sample whose antenna z is 0.3 m above the median z of the first 10 s, to the last sample); the whole stream
+(from 5 s after the first sample) is printed for information; a run with no pose samples or no flight is "run not certified". `tests/timehealth_isaac.sh [--logs DIR]` tests the function on synthetic streams (real time gives 1.0, half speed 0.5,
+a 2-s stall gives 0 and fails the sliding mean, too few samples give none) and the analyzer on a real run directory. Criteria fixed before the first run on 2026-11-03; they test that a number is produced correctly, not that Isaac meets `min_rtf`.
+
+Results (2026-11-03, single runs):
+- `tests/timehealth_isaac.sh --logs <stage D run>`: all checks PASS. The measured run (one Iris, empty scene, no sensors, RTX 5060 Ti, taking off to 2.5 m): flight window (40.3 s) worst 5-s mean 0.975 (>= `min_rtf` 0.95), worst single sample 0.68; whole stream
+  worst 5-s mean 0.731 (includes start-up and the wait for PX4); ns-3 lag at most 1.687 ms (limit 10 ms).
+- Cross-check of the method on the Gazebo regression run (`tests/containers_leader_follower.sh`): pose-derived median 1.000, worst 5-s mean 0.997, single samples 0.80 to 1.20; Gazebo's own `/stats` factor: median 1.000, worst 5-s mean 1.000.
+  The pose-derived value agrees on the sliding mean and is noisier per sample.
+- The earlier stage B whole-run figures (median 0.85, min 0.55 over 10-s windows) were measured differently, over a run that included the wait for PX4; they are not comparable with the flight-window figure.
+These figures are for an empty scene with no sensors; stage F adds a camera. The flight-window mean factor of the measured stage E run was above 1 (1.158 was printed when a later version of the analyzer was run on that run's log; that log directory has not been kept, so the number cannot be reproduced): the figures show a lower bound being met, not real-time pacing (see the stage F finding).
+
+## Isaac Sim stage F: camera path
+
+Experimental. One Isaac Sim camera on the vehicle (`agents[].camera`, Isaac only), streamed over the management network to the agent container and never over the emulated radio. `tests/isaac_camera_path.sh` with
+`config/experiments/isaac_camera.yaml` (camera 320 x 240 at 15 Hz configured). Criteria, fixed on 2026-11-03 before the first run (the owner accepted these thresholds): (F1) at the agent container's receiver the average
+frame rate between arming and the end of the flight window is at least 10 frames/s; (F2) each frame has `width x height x 3` bytes and at least 90 % of frames are not constant (the standard deviation of a byte sample > 1.0); (F3) the ns-3 pcap
+holds frames (so the check is not vacuous) and none to or from TCP port 5700 + `px4_instance`; (F4) the flight-window real-time factor, judged by `tools/analyze_isaac.py`, stays at or above `time.min_rtf` (0.95) with the camera on. Part A of the
+test checks the frame protocol and receiver (`orchestrator/camera_sink.py`) without Docker. The measured frame rate and real-time factor with the camera are reported next to the stage E figure without a camera.
+
+Results (2026-11-03, two single runs, same hardware and versions as stage C; `COSIM_ACCEPT_ISAAC_EULA=Y tests/isaac_camera_path.sh`, the second with `save_every: 100` added to the config): all checks PASS in both. Part A (protocol and receiver) passes.
+- F1: 16.9 frames/s (766 frames in 45.2 s) and 15.6 frames/s (706 frames in 45.2 s) at the receiver, against 15 Hz configured in simulated time. A rate above the configured one is expected when simulated time runs faster than wall time (next point). Frames
+  rendered before the receiver was connected are dropped (run 1: sequence numbers 1 to 74 missing at the start). Each frame is 230 400 bytes, so the stream is about 3.6 MB/s.
+- F2: all frames 320 x 240 x 3 bytes, 100 % not constant. Saved frames (run 2, converted to PNG and looked at) show the lit scene: a red post, grey ground, horizon and sky. The offline simulator container logs MDL material compile errors for materials
+  hosted on NVIDIA's asset server (observed names `Linen_Blue`, `Carpet_Gray`); the frames above show no sign of them, but material realism offline is not established.
+- F3: the pcap held 9 frames and none on TCP port 5700. This is a weak check: the stream is on the management network by construction and the radio was nearly idle (one agent).
+  **Criterion addition, 2026-11-04 (whole-branch review):** F3a requires that the receiver's recorded sender address (`camera_<agent>.csv.peer`, the address of the connecting peer) equals the simulator's management address (`network.mgmt.bridge_ip`), which is positive evidence for the path; F3b is the pcap check above. The receiver also now binds the agent's management address only, and keeps partial frame bytes across receive timeouts (Part A, A5 and A6).
+- F4 (flight-window worst 5-s mean of the real-time factor, criterion 0.95): run 1 0.986, run 2 0.952. Run 2 passed by 0.002; the run-to-run difference is larger than any difference between runs with and without the camera (stage E, no camera, one run: 0.975).
+  At this resolution and rate no camera penalty is visible in single runs; none can be excluded.
+- **Finding, not a criterion: Isaac Sim's simulation is not paced to wall time.** In the flight window the mean factor was 1.12 (run 1) and 1.03 (run 2); the stage E run without a camera had a mean above 1 (see the stage E note on its figure). Gazebo is held at 1.000 by its own
+  setting. A factor above 1 means vehicle dynamics advance faster than the wall-clock ROS 2 nodes and ns-3 expect, which the validity check (a lower bound only) does not catch. `tools/analyze_isaac.py` now prints the flight-window mean and the highest 5-s window mean as information, and a `WARN  not paced to wall time` line when the flight-window mean is above 1.05 (a warning only; 1.05 is 5 % above real time, chosen on 2026-11-04 without reference to a result). Pacing the loop
+  to wall time, or an upper bound on the factor, is not implemented and would need its own criterion.
+- **Re-runs after the review fixes (2026-11-04, two single runs, `tests/isaac_camera_path.sh`, same hardware and versions):** run 3: F1 16.2 frames/s, F2 ok, F3a and F3b PASS, **F4 FAIL**: flight-window worst 5-s mean 0.900 (criterion 0.95), flight-window mean 1.062, highest 5-s window mean 1.219. Run 4: all PASS; F4 worst 5-s mean 1.021, flight-window mean 1.111, highest 5-s window mean 1.236. Across the four stage F runs the worst 5-s mean was 0.986, 0.952, 0.900 and 1.021, so the lower-bound criterion is met in three of four runs; the margin is small and run-to-run variation is larger than any camera effect, and the cause of the 0.900 run was not investigated. The threshold is unchanged.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the

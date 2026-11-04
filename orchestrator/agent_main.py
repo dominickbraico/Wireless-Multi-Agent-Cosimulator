@@ -24,6 +24,7 @@ import yaml
 import fleet
 import simulators
 import supervise
+import camera_sink
 import vehicles
 from supervise import file_contains, spawn, wait_for
 
@@ -62,6 +63,10 @@ def main():
     spawn([XRCE, "udp4", "-p", "8888"], f"{LOGS}/{name}_xrce.log", env=xenv, label="xrce")
     spawn([f"{PX4_BUILD}/bin/px4", "-i", str(inst), "-d", f"{PX4_BUILD}/etc"], f"{LOGS}/{name}_px4.log", env=penv, cwd=wd, label="px4")
     px4_log = f"{LOGS}/{name}_px4.log"
+    if agent.get("camera"):                              # camera frames from the simulator arrive here over the management network (orchestrator/camera_sink.py)
+        spawn(["python3", "/opt/cosim/orchestrator/camera_sink.py", "--bind", agent["mgmt_ip"], "--port", str(camera_sink.PORT_BASE + inst), "--csv", f"{LOGS}/camera_{name}.csv"]
+              + (["--ppm-dir", f"{LOGS}/camera_{name}_frames", "--ppm-every", str(int(agent["camera"]["save_every"]))] if agent["camera"].get("save_every") else []),
+              f"{LOGS}/camera_sink_{name}.log", label="camera")
     def px4_ready():
         """PX4 prints "Ready for takeoff!" only for rotary- and fixed-wing vehicles (Commander::checkAndInformReadyForTakeoff, SITL builds), never
         for a rover, so a rover is asked directly: `commander check` answers "Preflight check: OK" when every arming check passes."""
