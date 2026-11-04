@@ -67,6 +67,11 @@ def check(cfg):
         v = for_simulator(a, sim)
         if a.get("camera") and sim != "isaac":
             raise SystemExit(f"agent {a['name']}: `camera` is only implemented for simulator.type isaac (this is {sim})")
+        if a.get("camera"):
+            for key in ("width", "height", "rate_hz"):
+                val = a["camera"].get(key)
+                if not isinstance(val, (int, float)) or isinstance(val, bool) or val <= 0:
+                    raise SystemExit(f"agent {a['name']}: `camera.{key}` must be a positive number (got {val!r}); see docs/CONFIGURATION.md, `camera`")
         if sim == "gazebo":
             want = f"{v['model']}_{a['px4_instance']}"
             if a.get("px4_gz_model") != want:

@@ -24,6 +24,7 @@ log, cfg_f = sys.argv[1:3]
 cfg = yaml.safe_load(open(cfg_f))
 rmin, win, lag_max = cfg["time"]["min_rtf"], cfg["time"].get("rtf_window_s", 5.0), cfg["time"]["max_lag_ms"]
 ok_all = True
+PACED_WARN = 1.05      # flight-window mean RTF above this prints a warning (information only; chosen as 5 % above real time, recorded in docs/EXPERIMENTS.md)
 
 
 def check(name, cond, detail=""):
@@ -64,6 +65,11 @@ else:
     fl = rtf_check(samples, lift, t_last, rmin, win)
     check(f"RTF flight window {win:g}-s sliding mean >= {rmin}", fl["ok"],
           f"worst window mean {fl['worst_window_mean']:.3f}, worst sample {fl['worst_sample']:.2f}, {fl['n']} samples, flight {t_last - lift:.1f} s" if fl["n"] else "no samples")
+    if fl["n"]:
+        print(f"RTF flight window (information): highest {win:g}-s window mean {fl['best_window_mean']:.3f}")
+        if fv and sum(fv) / len(fv) > PACED_WARN:     # a warning, not a criterion: the criterion above is a lower bound only
+            print(f"WARN  not paced to wall time: flight-window mean {sum(fv) / len(fv):.3f} > {PACED_WARN}; the vehicle dynamics ran faster than ns-3 and the ROS 2 nodes, "
+                  "so the run is certified for the lower bound only (docs/EXPERIMENTS.md, Isaac Sim stage F finding)")
 
 try:
     summ = json.load(open(f"{log}/ns3/summary.json"))

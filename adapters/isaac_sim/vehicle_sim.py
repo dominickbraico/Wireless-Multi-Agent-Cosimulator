@@ -72,7 +72,7 @@ if cam_agents:
         FixedCuboid(prim_path=f"/World/post{i}", name=f"post{i}", position=[px, py, 1.5], scale=[0.6, 0.6, 3.0], color=np.array(col))
 
 pose = cfg["network"]["pose"]
-sender = pose_feed.PoseSender((pose["listen_addr"], int(pose["port"])), pose["rate_hz"], {a["name"]: a["antenna_offset"] for a in cfg["agents"]})
+sender = pose_feed.PoseSender((pose["listen_addr"], int(pose["port"])), pose["rate_hz"], {a["name"]: a.get("antenna_offset", [0.0, 0.0, 0.0]) for a in cfg["agents"]})      # default as documented in docs/CONFIGURATION.md
 drones = {}                                                   # agent name -> Pegasus vehicle
 
 for a in cfg["agents"]:

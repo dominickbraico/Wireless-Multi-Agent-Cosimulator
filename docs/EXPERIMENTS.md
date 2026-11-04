@@ -104,6 +104,8 @@ is refused with its name; (2) without an `nvidia` runtime the generator stops wi
 (4) the generated Compose file reserves a GPU for the simulator service and for no other service, and the simulator service has no `GZ_` variable; (5) `cosim up` brings the stack up (simulator, ns-3 and
 agent1 healthy) and agent1 reports PX4 ready; (6) PX4's start-up log shows no `PX4_GZ_` variable.
 
+**Criterion change, 2026-11-04 (whole-branch review):** check 6 as written could not fail, because PX4 does not print its environment to its log. It now reads the environment of the running `px4` process from `/proc` in agent1 and requires `PX4_SIM_MODEL=none_iris` and no `PX4_GZ_*` variable (6a, 6b). Check 7 was added: a `camera` block without a positive `width`, `height` or `rate_hz` is refused with a message naming `camera.<key>` (offline). Checks 1 to 5 are unchanged. Re-run on 2026-11-04 (single run, same hardware and versions): all checks, including 6a, 6b and 7, PASS. The 2026-11-03 result below for check 6 therefore rested on the old form.
+
 Result (2026-11-03, single run, Isaac Sim 5.1.0 + Pegasus v5.1.0, RTX 5060 Ti, driver 580.178.04, image `cosim-sim-isaac` built from `nvcr.io/nvidia/isaac-sim:5.1.0`): all six checks PASS.
 Two earlier runs failed and led to fixes recorded in [CONTAINERS.md](CONTAINERS.md): the simulator container's offline network made Pegasus' import and Isaac's default ground plane fail. In the passing run agent1's PX4 logged
 `Simulator connected on TCP port 4560.` to the simulator at the management address and `Ready for takeoff!`. This shows start-up only: the vehicle was not flown, no pose reached ns-3, and the real-time factor was not measured.
@@ -135,7 +137,7 @@ Results (2026-11-03, single runs):
 - Cross-check of the method on the Gazebo regression run (`tests/containers_leader_follower.sh`): pose-derived median 1.000, worst 5-s mean 0.997, single samples 0.80 to 1.20; Gazebo's own `/stats` factor: median 1.000, worst 5-s mean 1.000.
   The pose-derived value agrees on the sliding mean and is noisier per sample.
 - The earlier stage B whole-run figures (median 0.85, min 0.55 over 10-s windows) were measured differently, over a run that included the wait for PX4; they are not comparable with the flight-window figure.
-These figures are for an empty scene with no sensors; stage F adds a camera. The flight-window mean factor of the measured stage E run was 1.158 (not stated above): the figures show a lower bound being met, not real-time pacing (see the stage F finding).
+These figures are for an empty scene with no sensors; stage F adds a camera. The flight-window mean factor of the measured stage E run was above 1 (1.158 was printed when a later version of the analyzer was run on that run's log; that log directory has not been kept, so the number cannot be reproduced): the figures show a lower bound being met, not real-time pacing (see the stage F finding).
 
 ## Isaac Sim stage F: camera path
 
@@ -151,11 +153,13 @@ Results (2026-11-03, two single runs, same hardware and versions as stage C; `CO
 - F2: all frames 320 x 240 x 3 bytes, 100 % not constant. Saved frames (run 2, converted to PNG and looked at) show the lit scene: a red post, grey ground, horizon and sky. The offline simulator container logs MDL material compile errors for materials
   hosted on NVIDIA's asset server (observed names `Linen_Blue`, `Carpet_Gray`); the frames above show no sign of them, but material realism offline is not established.
 - F3: the pcap held 9 frames and none on TCP port 5700. This is a weak check: the stream is on the management network by construction and the radio was nearly idle (one agent).
+  **Criterion addition, 2026-11-04 (whole-branch review):** F3a requires that the receiver's recorded sender address (`camera_<agent>.csv.peer`, the address of the connecting peer) equals the simulator's management address (`network.mgmt.bridge_ip`), which is positive evidence for the path; F3b is the pcap check above. The receiver also now binds the agent's management address only, and keeps partial frame bytes across receive timeouts (Part A, A5 and A6).
 - F4 (flight-window worst 5-s mean of the real-time factor, criterion 0.95): run 1 0.986, run 2 0.952. Run 2 passed by 0.002; the run-to-run difference is larger than any difference between runs with and without the camera (stage E, no camera, one run: 0.975).
   At this resolution and rate no camera penalty is visible in single runs; none can be excluded.
-- **Finding, not a criterion: Isaac Sim's simulation is not paced to wall time.** In the flight window the mean factor was 1.12 (run 1) and 1.03 (run 2); the stage E run without a camera had a mean of 1.16 and 5-s means up to 1.62. Gazebo is held at 1.000 by its own
-  setting. A factor above 1 means vehicle dynamics advance faster than the wall-clock ROS 2 nodes and ns-3 expect, which the validity check (a lower bound only) does not catch. `tools/analyze_isaac.py` now prints the flight-window mean as information. Pacing the loop
+- **Finding, not a criterion: Isaac Sim's simulation is not paced to wall time.** In the flight window the mean factor was 1.12 (run 1) and 1.03 (run 2); the stage E run without a camera had a mean above 1 (see the stage E note on its figure). Gazebo is held at 1.000 by its own
+  setting. A factor above 1 means vehicle dynamics advance faster than the wall-clock ROS 2 nodes and ns-3 expect, which the validity check (a lower bound only) does not catch. `tools/analyze_isaac.py` now prints the flight-window mean and the highest 5-s window mean as information, and a `WARN  not paced to wall time` line when the flight-window mean is above 1.05 (a warning only; 1.05 is 5 % above real time, chosen on 2026-11-04 without reference to a result). Pacing the loop
   to wall time, or an upper bound on the factor, is not implemented and would need its own criterion.
+- **Re-runs after the review fixes (2026-11-04, two single runs, `tests/isaac_camera_path.sh`, same hardware and versions):** run 3: F1 16.2 frames/s, F2 ok, F3a and F3b PASS, **F4 FAIL**: flight-window worst 5-s mean 0.900 (criterion 0.95), flight-window mean 1.062, highest 5-s window mean 1.219. Run 4: all PASS; F4 worst 5-s mean 1.021, flight-window mean 1.111, highest 5-s window mean 1.236. Across the four stage F runs the worst 5-s mean was 0.986, 0.952, 0.900 and 1.021, so the lower-bound criterion is met in three of four runs; the margin is small and run-to-run variation is larger than any camera effect, and the cause of the 0.900 run was not investigated. The threshold is unchanged.
 
 ## Demo with the Gazebo GUI
 

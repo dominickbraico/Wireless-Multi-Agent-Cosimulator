@@ -135,7 +135,7 @@ is the reference; the encoding is isolated in its `encode()`.
 
 **The vehicle link** is simulator-specific and is the part that needs thought. Gazebo's gz-transport reaches PX4 directly over `mgmt`
 (`PX4_GZ_STANDALONE`). Isaac Sim does not use gz-transport. The route used by the Isaac spike is PX4's MAVLink simulator interface (TCP, one port per instance, 4560 + `px4_instance`) as implemented by Pegasus Simulator, with a non-Gazebo `PX4_SIM_MODEL`
-and the simulator's address set in `px4_env()`; the agent containers, the swarm node and ns-3 are unaffected. Tested for one multirotor to PX4-ready only (see the Isaac section below).
+and the simulator's address set in `px4_env()`; the agent containers, the swarm node and ns-3 are unaffected. Tested for one multirotor (stages C to F in [EXPERIMENTS.md](EXPERIMENTS.md)): PX4 ready, takeoff with the pose feed reaching ns-3, and a camera stream; see the Isaac section below.
 
 Steps: add the Dockerfile, add the registry entry (and the `px4_env()` that attaches PX4), write the adapter so it satisfies the pose contract, set
 `simulator.type: isaac` in a copy of an experiment YAML, then run `python3 orchestrator/cosim.py build` and a test.
@@ -148,7 +148,7 @@ business only.
 `simulator.type: isaac` runs Isaac Sim 5.1.0 (headless) with Pegasus Simulator v5.1.0 (commit `644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`) in the simulator container, with the
 pinned PX4 in each agent container connected over the simulator MAVLink interface. It exists to find out what Isaac Sim needs; it is not a supported simulator. What is implemented: the
 driver (`orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile`), the scene script (`adapters/isaac_sim/vehicle_sim.py`) and one vehicle, `iris`. The pose feed to ns-3 is `adapters/isaac_sim/pose_feed.py`, a thread inside the Isaac process (so it keeps sending when the simulation blocks in lockstep). The real-time factor comes from the pose feed (`tools/analyze_isaac.py`, `tools/timehealth.py rtf_from_poses`; "Isaac Sim stage E" in [EXPERIMENTS.md](EXPERIMENTS.md)); Isaac runs are judged by `analyze_isaac.py`, not `analyze_formation.py`. A camera stream (`agents[].camera`, `orchestrator/camera_sink.py`, `adapters/isaac_sim/camera_stream.py`) reaches the agent container over the management network as raw frames, not as a ROS 2 topic. Not implemented:
-other sensors, a ROS 2 camera publisher, pacing the simulation to wall time (Isaac's loop runs faster than real time; stage F finding in EXPERIMENTS.md), rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; test: `tests/containers_isaac_ready.sh` ("Isaac Sim stage C" in [EXPERIMENTS.md](EXPERIMENTS.md)).
+other sensors, a ROS 2 camera publisher, pacing the simulation to wall time (Isaac's loop runs faster than real time; stage F finding in EXPERIMENTS.md), rovers, the GUI. Example: `config/experiments/isaac_one_agent.yaml`; tests: `tests/px4_mavlink_link.sh` (stage A), `tests/containers_isaac_ready.sh` (C), `tests/isaac_pose_feed.sh` (D), `tests/timehealth_isaac.sh` (E), `tests/isaac_camera_path.sh` (F), each described under "Isaac Sim stage A" to "stage F" in [EXPERIMENTS.md](EXPERIMENTS.md).
 
 Requirements (measured on the development machine: Ubuntu 24.04, RTX 5060 Ti, driver 580.178.04):
 - An NVIDIA GPU, the NVIDIA Container Toolkit registered with the Docker engine you use (`docker info` must list an `nvidia` runtime; with Docker Desktop installed, `docker context ls` may point at its

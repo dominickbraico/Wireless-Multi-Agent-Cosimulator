@@ -8,6 +8,9 @@
 #   A2. a stream at half speed gives 0.5 +-0.02
 #   A3. a 2-s stall (t_sim constant, t_wall advancing, as the pose feed repeats the last pose) gives RTF 0 inside the stall, and the 5-s sliding mean over it is < 0.95
 #   A4. fewer than 6 samples give no RTF samples (no number is invented)
+#   A5. a synthetic run that flies at 1.5x wall time still meets the lower-bound criterion (no threshold changed) but the analyzer prints a "WARN  not paced to wall time"
+#       line, and prints the highest 5-s window mean (1.5 +-0.05) and the flight-window mean, so every RTF figure in the docs has a command that prints it
+#   A6. a synthetic run at real time (1.0) prints no such warning
 # Part B, a real run directory (only with --logs): tools/analyze_isaac.py prints either "RTF ..." with a measured number or "run not certified: <reason>",
 #   never neither; with a directory that has no pose samples it prints "run not certified". Whether the run meets time.min_rtf is reported, not asserted here.
 # Criteria fixed before the first run (docs/EXPERIMENTS.md, "Isaac Sim stage E").
@@ -58,6 +61,25 @@ for k in A1 A2 A3 A4; do
   name=$(case $k in A1) echo "real-time stream gives RTF 1.0";; A2) echo "half-speed stream gives RTF 0.5";; A3) echo "a stall shows as RTF 0 and fails the sliding mean";; A4) echo "too few samples give no RTF";; esac)
   case "$line" in "$k ok") chk "$name" ok;; *) chk "$name" "${line:-$(echo "$a" | tail -1)}";; esac
 done
+
+synth() {      # $1 = simulated seconds per wall second; a 40-s stream at 50 Hz, resting for 12 s then rising 3 m; prints the directory
+  d=$(mktemp -d); mkdir -p "$d/ns3"
+  python3 - "$d/ns3/pose_applied.csv" "$1" <<'PYE'
+import sys
+f = open(sys.argv[1], "w"); k = float(sys.argv[2])
+f.write("t_ns3_s,node,seq,t_sim_s,x,y,z,stale_ms,t_wall_apply_s\n")
+for i in range(2000):
+    t = i * 0.02
+    z = 0.1 if t < 12 else 0.1 + min(3.0, (t - 12) * 0.5)
+    f.write(f"{t:.3f},0,{i},{t * k:.6f},0,0,{z:.3f},0,{1000.0 + t:.6f}\n")
+PYE
+  echo '{"valid_ns3_lag": true, "ns3_max_lag_ms": 0.1}' > "$d/ns3/summary.json"; echo "$d"
+}
+d15=$(synth 1.5); o15=$(python3 "$ROOT/tools/analyze_isaac.py" "$d15" "$CFG" 2>&1)
+echo "$o15" | grep -q "^PASS  RTF flight window" && echo "$o15" | grep -q "^WARN  not paced to wall time" && echo "$o15" | grep -qE "highest 5-s window mean 1\.(4[5-9]|5[0-5])" && echo "$o15" | grep -qE "flight window \(information\): mean 1\.(4[5-9]|5[0-5])" && chk "A5 1.5x run: criterion met, WARN printed, highest window mean and flight mean printed" ok || chk "A5 1.5x run: criterion met, WARN printed, highest window mean and flight mean printed" "$(echo "$o15" | tr '\n' '|' | cut -c1-300)"
+d10=$(synth 1.0); o10=$(python3 "$ROOT/tools/analyze_isaac.py" "$d10" "$CFG" 2>&1)
+echo "$o10" | grep -q "^PASS  RTF flight window" && ! echo "$o10" | grep -q "^WARN" && chk "A6 real-time run: criterion met, no WARN" ok || chk "A6 real-time run: criterion met, no WARN" "$(echo "$o10" | tr '\n' '|' | cut -c1-300)"
+rm -r "$d15" "$d10"
 
 if [ -n "$LOGS" ]; then
   out=$(python3 "$ROOT/tools/analyze_isaac.py" "$LOGS" "$CFG" 2>&1); rc=$?

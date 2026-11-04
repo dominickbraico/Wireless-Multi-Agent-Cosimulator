@@ -3,7 +3,7 @@
     {"seq": n, "t_sim": s, "t_wall": s, "agents": {"agent1": [x, y, z], ...}}     antenna position, metres, East-North-Up, same origin as ns-3
 
 PoseSender runs in its own thread inside the Isaac Sim process, so the feed keeps going at `rate_hz` in wall-clock time even when the simulation loop
-is blocked (Pegasus waits for PX4 in lockstep): the last pose is repeated, `t_wall` advances, and ns-3 reports how stale the pose is from it.
+is blocked (Pegasus waits for PX4 in lockstep): the last pose is repeated and `t_wall` advances (it is stamped at send time, so ns-3's `stale_ms` stays near 0 during a stall); the stall shows only as `t_sim` standing still, which is what the real-time factor is computed from (tools/timehealth.py).
 The simulation loop calls update() after each physics step. Pure Python: no Isaac Sim imports, so it is tested outside the simulator (tests/isaac_pose_feed.sh).
 """
 import json

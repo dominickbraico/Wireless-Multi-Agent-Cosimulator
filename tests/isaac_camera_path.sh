@@ -6,9 +6,12 @@
 #   A2. a constant frame has std 0 and a varied one std > 1.0 (byte sample)
 #   A3. a frame whose nbytes is not width x height x 3 is flagged size_ok = 0
 #   A4. with ppm_every = 2 the receiver also writes frames 0, 2, 4 as binary PPM files (debugging aid; off by default)
+#   A5. a pause longer than the receive timeout in the middle of a frame does not lose the frame or the stream (all three frames are logged)
+#   A6. the receiver records the sender's address (<csv>.peer), the evidence F3a uses
 # Part B (full stack, NVIDIA runtime and Isaac image needed): criteria F1-F4 of docs/EXPERIMENTS.md "Isaac Sim stage F", fixed before the first run:
 #   F1 average >= 10 frames/s at the receiver from arming to the end of the flight window   F2 frame size correct and >= 90 % of frames not constant
-#   F3 the ns-3 pcap holds frames and none to or from TCP port 5700 + px4_instance            F4 flight-window RTF >= time.min_rtf (tools/analyze_isaac.py)
+#   F3 (a) the receiver's recorded sender address is the simulator's management address (positive evidence for the management-network path), (b) the ns-3 pcap
+#      holds frames and none on TCP port 5700 + px4_instance      F4 flight-window RTF >= time.min_rtf (tools/analyze_isaac.py)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CFG="$ROOT/config/experiments/isaac_camera.yaml"; TIMEOUT=900
@@ -54,6 +57,23 @@ time.sleep(0.5); sink2.stop(); c2.close(); th2.join(timeout=2)
 saved = sorted(f for f in os.listdir(d2) if f.endswith(".ppm"))
 okp = saved == ["frame_000000.ppm", "frame_000002.ppm", "frame_000004.ppm"] and open(os.path.join(d2, saved[1]), "rb").read() == b"P6\n2 1\n255\n" + bytes([2, 0, 0, 0, 2, 0])
 print("A4", "ok" if okp else f"saved {saved}")
+# A5: the sender pauses 0.6 s in the middle of the second frame; the receiver's timeout is 0.2 s
+d3 = tempfile.mkdtemp()
+sink3 = camera_sink.Sink(("127.0.0.1", 0), os.path.join(d3, "cam.csv"), recv_timeout=0.2)
+th3 = threading.Thread(target=sink3.run, daemon=True); th3.start()
+c3 = socket.create_connection(("127.0.0.1", sink3.port))
+c3.sendall(camera_sink.pack_frame(0, 0.0, 2, 1, bytes(6)))
+f1 = camera_sink.pack_frame(1, 1.0, 2, 1, bytes([1, 2, 3, 4, 5, 6]))
+c3.sendall(f1[:30]); time.sleep(0.6); c3.sendall(f1[30:])
+c3.sendall(camera_sink.pack_frame(2, 2.0, 2, 1, bytes(6)))
+time.sleep(0.5); sink3.stop(); c3.close(); th3.join(timeout=2)
+r3 = list(csv.DictReader(open(os.path.join(d3, "cam.csv"))))
+print("A5", "ok" if [r["seq"] for r in r3] == ["0", "1", "2"] else f"seqs {[r['seq'] for r in r3]}")
+try:
+    peer = open(path + ".peer").read().strip()
+except FileNotFoundError:
+    peer = None
+print("A6", "ok" if peer == "127.0.0.1" else f"peer file {peer!r}")
 rows = list(csv.DictReader(open(path)))
 ok1 = len(rows) == 3 and [r["seq"] for r in rows] == ["0", "1", "2"] and all(float(r["t_wall_s"]) > 1e9 and r["width"] == "8" and r["height"] == "6" for r in rows)
 print("A1", "ok" if ok1 else f"rows {rows}")
@@ -63,9 +83,9 @@ ok3 = len(rows) == 3 and [r["size_ok"] for r in rows] == ["1", "1", "0"]
 print("A3", "ok" if ok3 else f"size_ok {[r.get('size_ok') for r in rows]}")
 E
 )
-for k in A1 A2 A3 A4; do
+for k in A1 A2 A3 A4 A5 A6; do
   line=$(echo "$a" | grep "^$k " | head -1)
-  name=$(case $k in A1) echo "receiver logs one row per frame";; A2) echo "constant and varied frames are told apart";; A3) echo "a wrongly sized frame is flagged";; A4) echo "optional frame dump writes every Nth frame as PPM";; esac)
+  name=$(case $k in A1) echo "receiver logs one row per frame";; A2) echo "constant and varied frames are told apart";; A3) echo "a wrongly sized frame is flagged";; A4) echo "optional frame dump writes every Nth frame as PPM";; A5) echo "a pause inside a frame loses nothing";; A6) echo "the sender address is recorded";; esac)
   case "$line" in "$k ok") chk "$name" ok;; *) chk "$name" "${line:-$(echo "$a" | tail -1)}";; esac
 done
 [ $fail = 0 ] || { echo "RESULT: FAIL (part A)"; exit 1; }
@@ -111,12 +131,15 @@ cat "$OUT/camera_check.txt" | sed 's/^/  /'
 grep -q "^F1 ok" "$OUT/camera_check.txt" && chk "F1 average frame rate at the receiver >= 10/s" ok || chk "F1 average frame rate at the receiver >= 10/s" "$(grep '^F1' "$OUT/camera_check.txt")"
 grep -q "^F2 ok" "$OUT/camera_check.txt" && chk "F2 frames correctly sized and mostly not constant" ok || chk "F2 frames correctly sized and mostly not constant" "$(grep '^F2' "$OUT/camera_check.txt")"
 
+SIM_IP=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["network"]["mgmt"]["bridge_ip"])' "$CFG")
+PEER=$(cat "$OUT/camera_agent1.csv.peer" 2>/dev/null)
+[ -n "$PEER" ] && [ "$PEER" = "$SIM_IP" ] && chk "F3a camera sender address is the simulator's management address ($SIM_IP)" ok || chk "F3a camera sender address is the simulator's management address ($SIM_IP)" "recorded '${PEER:-nothing}'"
 PCAP=$(ls "$OUT"/ns3/wifi-*.pcap 2>/dev/null | head -1)
 if [ -n "$PCAP" ]; then
-  all=$(tcpdump -r "$PCAP" -nn 2>/dev/null | wc -l); cam=$(tcpdump -r "$PCAP" -nn 'tcp port 5700' 2>/dev/null | wc -l)
-  [ "$all" -gt 0 ] && [ "$cam" = 0 ] && chk "F3 ns-3 pcap has $all frames, none on TCP port 5700" ok || chk "F3 ns-3 pcap has frames and none on TCP port 5700" "$all frames, $cam on port 5700"
+  all=$(tcpdump -r "$PCAP" -nn 2>/dev/null | wc -l); cam=$(tcpdump -r "$PCAP" -nn 'tcp port 5700' 2>/dev/null | wc -l)   # agent1 is px4_instance 0
+  [ "$all" -gt 0 ] && [ "$cam" = 0 ] && chk "F3b ns-3 pcap has $all frames, none on TCP port 5700" ok || chk "F3b ns-3 pcap has frames and none on TCP port 5700" "$all frames, $cam on port 5700"
 else
-  chk "F3 ns-3 pcap present" "no pcap in $OUT/ns3"
+  chk "F3b ns-3 pcap present" "no pcap in $OUT/ns3"
 fi
 
 out=$(python3 "$ROOT/tools/analyze_isaac.py" "$OUT" "$CFG" 2>&1); echo "$out" | sed 's/^/  | /'
