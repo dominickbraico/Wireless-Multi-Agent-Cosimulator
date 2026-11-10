@@ -18,7 +18,10 @@ checked against the modelled drops themselves, because which links drop depends 
   roam mode  modelled: at least one link falls below the floor for >= 3.0 s and recovers; every link is above the floor at the end; never more than
              max_dropped_links links below it at once. measured: for every modelled drop lasting at least link_timeout + 1 s, in both directions a LOST event within
              [-1.0 s, link_timeout + 2.0 s] of the drop and an UP event within [-1.0 s, 10.0 s] of the recovery; plus the no-unexplained-LOST rule below.
-  validity   ns-3 lag within time.max_lag_ms; Gazebo RTF 5-s sliding mean >= time.min_rtf from take-off (see docs/ARCHITECTURE.md)
+  validity   ns-3 lag within time.max_lag_ms; simulator RTF 5-s sliding mean >= time.min_rtf from take-off (see docs/ARCHITECTURE.md). Gazebo: its own /stats factor
+             (bridge/rtf.csv). Isaac Sim (simulator.type isaac) has no such source, so the factor is taken from the pose feed (tools/timehealth.py rtf_from_poses, first agent),
+             over the same window and against the same threshold; a missing source fails the check instead of skipping it. Isaac's loop is not paced to wall time
+             (docs/EXPERIMENTS.md, stage F finding), so the mean and the highest window are printed too, with a warning above 1.05 as in tools/analyze_isaac.py.
   isolation  no domain-0, XRCE or PX4-topic traffic on the emulated channel; the swarm domain (42) and the mesh topic are present
 Writes mesh_dropout.png (signal and heartbeat timeline, trajectories), comm_map_dropout.png (map before / at the deepest dropout / after),
 mesh_report.json. Exit 0 if every check passes.
@@ -37,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "orchestrator"))
 sys.path.insert(0, HERE)
 import mesh_plan
-from timehealth import rtf_check
+from timehealth import rtf_check, rtf_from_poses
 
 HOME_TOL_M, DETECT_MIN_S, DETECT_EXTRA_S, RECOVER_MIN_S, RECOVER_MAX_S = 2.0, -1.0, 2.0, -1.0, 10.0
 END_TOL_M = 5.0                                                            # after touchdown: a sanity bound for a crash or fly-away, not a precision limit
@@ -307,15 +310,29 @@ try:
     check("ns-3 real-time lag within limit", summ["valid_ns3_lag"], f"max {summ['ns3_max_lag_ms']} ms")
 except FileNotFoundError:
     check("ns-3 summary.json written (clean shutdown)", False)
-rt = [(float(r["t_wall_s"]), float(r["rtf"])) for r in rows(f"{log}/bridge/rtf.csv")]
+sim_type = cfg["simulator"]["type"]
+if sim_type == "isaac":                                         # no stats topic: simulated over wall seconds across 5 applied pose samples of the first agent
+    rt = rtf_from_poses(rows(f"{log}/ns3/pose_applied.csv"), 0)
+else:
+    rt = [(float(r["t_wall_s"]), float(r["rtf"])) for r in rows(f"{log}/bridge/rtf.csv")]
+sim_label = {"gazebo": "Gazebo", "isaac": "Isaac Sim (from the pose feed)"}.get(sim_type, sim_type)
+if not rt:
+    check(f"{sim_label} RTF samples present", False, "no real-time-factor source for this run")
 if rt and ref.size:
     win, rmin = cfg["time"].get("rtf_window_s", 5.0), cfg["time"]["min_rtf"]
     t_pose0 = ref[0, 0] + 5
     go = f"{log}/go"
     t_flight = max(t_pose0, os.path.getmtime(go)) if os.path.exists(go) else t_pose0
     rc = rtf_check(rt, t_flight, ref[-1, 0], rmin, win)
-    check(f"Gazebo RTF {win:g}-s sliding mean >= {rmin}", rc["ok"],
+    check(f"{sim_label} RTF {win:g}-s sliding mean >= {rmin}", rc["ok"],
           f"worst window mean {rc['worst_window_mean']:.3f}, worst sample {rc['worst_sample']:.2f}" if rc["n"] else "no samples")
+    if sim_type == "isaac" and rc["n"]:                         # information and a warning, not a criterion (the criterion is a lower bound only)
+        fv = [v for t, v in rt if t_flight <= t <= ref[-1, 0]]
+        mean = sum(fv) / len(fv)
+        print(f"RTF flight window (information): mean {mean:.3f}, highest {win:g}-s window mean {rc['best_window_mean']:.3f}; values above 1 mean simulated time ran faster than wall time")
+        if mean > 1.05:
+            print(f"WARN  not paced to wall time: flight-window mean {mean:.3f} > 1.05; the vehicle dynamics ran faster than ns-3 and the ROS 2 nodes (docs/EXPERIMENTS.md, Isaac Sim stage F finding)")
+        report["rtf_flight_mean"] = mean
     report["rtf_worst_window_mean"] = rc["worst_window_mean"]
 
 # ---- radio isolation ----

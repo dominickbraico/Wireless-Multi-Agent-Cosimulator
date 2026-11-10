@@ -83,7 +83,7 @@ direction allows, no plan with the requested drops within `max_attempts`, ...).
 | Measured, roam, when `min_isolation_s` > 0 | one agent had every neighbour LOST at the same time, from its own heartbeat log (added 2026-10-21 with the isolation option; fixed before its first run) |
 | Modelled, excursion | links to the planned dropped anchors go below the floor and later recover; every other link never goes below it |
 | Measured (heartbeats) | for every modelled drop lasting at least `link_timeout_s` + 1 s (roam), or every planned dropped link (excursion), in both directions: LOST within [-1.0 s, `link_timeout_s` + 2.0 s] of the modelled drop, then UP within [-1.0 s, 10 s] of the modelled recovery; and every LOST event of the run falls where the model has the signal below the floor |
-| Validity | ns-3 lag within `time.max_lag_ms`; Gazebo real-time factor over 5 s at least `time.min_rtf` from take-off ([ARCHITECTURE.md](ARCHITECTURE.md), "Run validity") |
+| Validity | ns-3 lag within `time.max_lag_ms`; the simulator's real-time factor over 5 s at least `time.min_rtf` from take-off ([ARCHITECTURE.md](ARCHITECTURE.md), "Run validity"); Gazebo: its own `/stats` factor; Isaac Sim (experimental): taken from the pose feed ([EXPERIMENTS.md](EXPERIMENTS.md), "Isaac Sim: four multirotors"); no source fails the check |
 | Isolation | no domain-0, XRCE or PX4-topic traffic on the channel; the swarm domain and the mesh topic are present |
 
 The end-position limit was 2.0 m until 2026-10-21. A Baylands run then failed it by 0.17 m although the agent had hovered 0.10 m from its spawn point when landing began: after touchdown the vehicle was bumped 2.2 m by the

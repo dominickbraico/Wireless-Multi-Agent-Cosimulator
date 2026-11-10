@@ -161,6 +161,22 @@ Results (2026-11-03, two single runs, same hardware and versions as stage C; `CO
   to wall time, or an upper bound on the factor, is not implemented and would need its own criterion.
 - **Re-runs after the review fixes (2026-11-04, two single runs, `tests/isaac_camera_path.sh`, same hardware and versions):** run 3: F1 16.2 frames/s, F2 ok, F3a and F3b PASS, **F4 FAIL**: flight-window worst 5-s mean 0.900 (criterion 0.95), flight-window mean 1.062, highest 5-s window mean 1.219. Run 4: all PASS; F4 worst 5-s mean 1.021, flight-window mean 1.111, highest 5-s window mean 1.236. Across the four stage F runs the worst 5-s mean was 0.986, 0.952, 0.900 and 1.021, so the lower-bound criterion is met in three of four runs; the margin is small and run-to-run variation is larger than any camera effect, and the cause of the 0.900 run was not investigated. The threshold is unchanged.
 
+## Isaac Sim: four multirotors in the mesh-dropout scenario
+
+Experimental. `COSIM_ACCEPT_ISAAC_EULA=Y tests/containers_mesh_dropout.sh --config config/experiments/isaac_four_agent_mesh_dropout.yaml`: the scenario and radio settings of `four_agent_mesh_dropout.yaml` (seed 7, Tx 4 dBm, D = 20.5 m)
+with four Pegasus Iris vehicles in Isaac Sim, each with its own PX4 on TCP 4560 + `px4_instance`, flown by the same ROS 2 nodes as on Gazebo. Criteria, fixed before the first run on 2026-11-10: those of the mesh-dropout scenario
+([MESH_DROPOUT.md](MESH_DROPOUT.md)) unchanged, with one substitution: the real-time factor is taken from the pose feed (`tools/timehealth.py rtf_from_poses`, first agent; `tools/analyze_mesh_dropout.py` does this when `simulator.type` is `isaac`),
+judged over the same window (from the start signal) against the same `time.min_rtf` (0.95) with the same 5-s sliding mean. A run without a real-time-factor source now fails that check instead of skipping it.
+
+Result (2026-11-10, single run, headless, no camera, Isaac Sim 5.1.0 + Pegasus v5.1.0, RTX 5060 Ti, driver 580.178.04, 16 cores): **the run is not valid: the real-time-factor check FAILED**; every other check passed.
+- Real-time factor: worst 5-s window mean 0.291, flight-window mean 0.594, highest 5-s window mean 0.666. In 10-s means over the whole run the factor was 0.26 to 0.32 for the first 40 s of the pose stream and 0.58 to 0.65 afterwards.
+  One Iris ran at or above 1.0 (stages E and F), so four vehicles do not hold real time on this machine as the scene script is written. Not investigated further. A likely cause, read from the code and not measured: with lockstep on (Pegasus' default,
+  `enable_lockstep`), each physics step (250 Hz) waits in turn for an actuator message from each vehicle's PX4 (`px4_mavlink_backend.py`, `recv_match(blocking=True)`), so the waits add up with the number of vehicles.
+- Everything else: all four vehicles armed, took off, flew their plans in offboard mode, landed and disarmed (0.03 to 0.21 m from their spawn points after touchdown); the three planned drops of agent3's links were modelled by ns-3 and seen in the heartbeats
+  in both directions (LOST 1.0 to 1.3 s after the modelled drop, UP -0.4 to +0.7 s around the modelled recovery); agent3 was fully disconnected for 17.8 s; no unexplained LOST event; ns-3 lag at most 7.87 ms (limit 10 ms); isolation checks passed.
+  Because simulated time ran at about 0.6 of wall time while ns-3 and the ROS 2 nodes ran at wall time, these figures show that the pipeline works with several Isaac vehicles; they are not valid measurements of the scenario.
+This is the first run with more than one Isaac vehicle and the first Isaac flight commanded by the ROS 2 offboard nodes (stages B and D used `px4-commander`). Not run: two or three vehicles, lockstep off, the GUI, a camera.
+
 ## Demo with the Gazebo GUI
 
 `demo/run_gui_demo.sh [--config YAML] [--world NAME] [--record] [--wireshark] [--no-gui] [--no-prompt]` runs the leader-follower flight with the
