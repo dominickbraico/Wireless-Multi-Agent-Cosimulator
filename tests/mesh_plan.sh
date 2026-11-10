@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Offline checks of the mesh-dropout flight plans (orchestrator/mesh_plan.py). No Docker, no ROS, no simulator: seconds.
-#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands and drone_rover_mesh_baylands YAMLs too)
+#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands, drone_rover_mesh_baylands and two_drone_two_rover_mesh_baylands YAMLs too)
 # Both modes, 40 seeds each.
 #   roam      (every agent flies): plans are repeatable and differ between seeds; the flight is re-simulated here from the plan file alone (independently of the
 #             planner): never more than max_dropped_links links at risk at once, at least min_drop_events clear drops, every path starts and ends at its spawn,

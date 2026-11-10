@@ -60,6 +60,9 @@ An agent with `vehicle: r1_rover` ([CONTAINERS.md](CONTAINERS.md), "Vehicle type
   when its route ended (5.0 m after it disarmed). Distances in the model are 3-D with the rover at its spawn height.
 
 `config/experiments/drone_rover_mesh_baylands.yaml` is the shipped example: a drone (agent1, the excursion agent) and a rover (agent2) in Baylands, 7.1 m apart, Tx power 4 dBm (dropout at 20.5 m).
+`config/experiments/two_drone_two_rover_mesh_baylands.yaml` is a fleet of four with the same radio settings: two drones (agent1, the excursion agent, and agent2) and two rovers (agent3, agent4) in a diamond. The planner has no
+collision avoidance on the ground, so that config keeps the rovers apart by layout: `rover_arena_radius_m` is 4.0 and the rovers' spawn points are 10 m apart, which leaves 2 m between their discs; each drone's spawn point is 2.4 m from both discs.
+A rover disc must be larger than the planner's 3 m minimum leg: with `rover_arena_radius_m: 3.0` no path can be drawn and the planner stops with an error.
 `tests/mesh_plan.sh --config` it checks the plans for 40 seeds (mode excursion is skipped for rovers). Not known: whether the ground within the rover's arena is free of obstacles anywhere but near the spawn point; the
 Baylands world has structures, and the planner has no ground-level obstacle map. A run reports it as a failure if the rover stops short.
 
@@ -135,6 +138,15 @@ The plan was found on the first candidate (flight 47 s; planned drop of the one 
 From the ground-truth poses: the drone flew 67 m (planned 65.6 m) and reached 22.7 m from its spawn point; the rover drove 32 m of the planned 42.4 m and got at most 5.2 m from its spawn point, so it cuts corners
 (the setpoint moves along the plan, the vehicle's own path controller smooths it). The comparison with the plan's length is not a criterion. Only this seed was flown; the plans of 40 seeds were checked offline.
 
+### Two drones and two rovers in Baylands (2026-11-10, seed 7, single run)
+
+`tests/containers_mesh_dropout.sh --config config/experiments/two_drone_two_rover_mesh_baylands.yaml` (agent1 and agent2 drones, agent1 the excursion agent; agent3 and agent4 R1 rovers; Tx 4 dBm, D = 20.5 m; Gazebo without the GUI;
+same development machine and images as the runs above): all checks passed.
+The plan was the 7th candidate (flight 54 s; planned clear drops of agent1's three links at plan t = 10 to 29 s, peaks 28 to 33 m). Measured: agent1 was fully disconnected for 18.3 s; the six heartbeat directions logged LOST
+0.9 to 1.3 s after the modelled drop and UP 0.1 to 0.6 s after the modelled recovery; no LOST event outside a modelled drop; the drones ended 0.02 and 0.04 m and the rovers 0.51 and 0.45 m from their spawn points; ns-3 lag at most 0.52 ms;
+worst 5-s real-time-factor window 0.998 (worst sample 0.91). In the plan the rovers never come closer than 6.1 m to each other (computed from the plan's waypoints; the driven separation was not measured).
+Offline, `tests/mesh_plan.sh --config` on this YAML passes for 40 seeds (at most 47 candidate plans, median 9). Only this seed was run; not run with the Gazebo GUI.
+
 ## Choices and findings worth knowing
 
 - **Heartbeat history depth.** `PeerState` has no key, so a subscriber keeps one shared keep-last history for all senders. With depth 1 the first run saw agent4 miss 1 to 3 s of agent1's heartbeats throughout the flight,
@@ -155,4 +167,4 @@ From the ground-truth poses: the drone flew 67 m (planned 65.6 m) and reached 22
 ## Limits
 
 Seed 7 is the only seed flown in the containers (the planners are checked for 40 seeds per mode). Excursion mode was flown with one wanderer. The scenario uses the Wi-Fi model of the YAML unchanged, so the dropout range is the
-one set by the log-distance model and the receiver floor, not a measured one. Not run: a world other than the flat one and Baylands, native (non-Docker) execution, more than four agents, more than one rover, a rover in the live demo with the Gazebo GUI.
+one set by the log-distance model and the receiver floor, not a measured one. Not run: a world other than the flat one and Baylands, native (non-Docker) execution, more than four agents, more than two rovers, two rovers whose discs overlap, a rover in the live demo with the Gazebo GUI.
