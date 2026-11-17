@@ -1,170 +1,402 @@
 # Mesh-dropout scenario
 
-A second control stack, separate from the leader-follower flight, whose purpose is to show links between agents **dropping and recovering**. The agents fly seeded random paths
-and return to their spawn points; whenever two of them are far enough apart the link between them drops, and it comes back when they close up again. Every agent broadcasts a
-heartbeat on the emulated radio and logs which neighbours it hears, so a dropout is visible three ways: the modelled signal in ns-3, the live map, and the agents' own message
-reception. Runs in the Docker deployment ([CONTAINERS.md](CONTAINERS.md)); nothing of the leader-follower stack is changed or reused except PX4's offboard base class and the
-vehicle-state reader.
+A scenario that shows links between agents dropping and recovering. The agents move along seeded random paths and
+return to their spawn points. A link drops when two agents are far enough apart and recovers when they close up.
 
-Two modes (`scenario.mesh_dropout.mode`):
+Every agent broadcasts a heartbeat on the emulated radio and logs which neighbours it hears. A dropout is therefore
+visible in three places: the modelled signal in ns-3, the live map, and the agents' own message reception. The scenario
+runs in the Docker deployment only ([CONTAINERS.md](CONTAINERS.md)).
 
-- **`roam` (default): every agent flies.** Four agents in a triangle (10 m sides, the fourth at the centroid), each on its own random path.
-- **`excursion`: one agent flies, the others hover** (the first version of this scenario): a wanderer makes an excursion that drops exactly 1 or 2 links to the hovering anchors.
+## Contents
 
-## Run it
+- [Quick start](#quick-start)
+- [Modes](#modes)
+- [Roam mode](#roam-mode)
+- [Excursion mode](#excursion-mode)
+- [Full isolation of one agent](#full-isolation-of-one-agent)
+- [Mixed fleet](#mixed-fleet)
+- [Configuration keys](#configuration-keys)
+- [Pass criteria](#pass-criteria)
+- [Results](#results)
+- [Design notes](#design-notes)
+- [Limitations](#limitations)
 
+## Quick start
+
+Build the images once, as described in [CONTAINERS.md](CONTAINERS.md):
+
+```bash
+python3 orchestrator/cosim.py build
 ```
-python3 orchestrator/cosim.py build                                  # once (images: docs/CONTAINERS.md)
-tests/mesh_plan.sh                                                   # offline checks of the flight plans, seconds, no Docker
-tests/containers_mesh_dropout.sh --config config/experiments/four_agent_mesh_dropout.yaml            # flat world, headless, with pass/fail checks
-demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml          # Baylands, Gazebo GUI + live signal map
-MESH_SEED=11 tests/containers_mesh_dropout.sh                         # another seed without editing the YAML
+
+Check the flight plans offline. This takes seconds and needs no Docker:
+
+```bash
+tests/mesh_plan.sh
 ```
 
-The demo picks the flight from the YAML's `scenario.type`. About 2.5 minutes per run. Outputs in the log directory: `mesh_dropout.png` (modelled signal and heartbeat events over time,
-distances, paths), `comm_map_dropout.png` (the signal map before, at the deepest dropout, and after), `mesh_report.json`, `mesh_plan.json` (the plan flown), `mesh/` (per-agent heartbeat
-logs) and the usual ns-3 and flight logs.
+Fly the scenario on the flat world, headless, with pass and fail checks. A run takes about 2.5 minutes:
 
-## What happens in `roam` mode
+```bash
+tests/containers_mesh_dropout.sh --config config/experiments/four_agent_mesh_dropout.yaml
+```
 
-- **Plan** (`orchestrator/mesh_plan.py`, a pure function of the YAML including the seed, so every container computes the same plan): each agent draws random waypoints inside `arena_radius_m` (40 m) of the
-  centre of the spawn points, until its path lasts at least `min_flight_s` (default 70 s; the shipped configs set 40 s; at `speed_mps`, 3 m/s), then returns to its spawn point. A candidate set of four paths is kept only if a simulation of the whole
-  flight shows **(1)** never more than `max_dropped_links` (default 2; the shipped configs use 3) links at risk at once, where "at risk" means a 3-D distance above *D* minus `margin_m` (3 m), and **(2)** at least `min_drop_events` (2) clear
-  drops, where "clear" means a distance above *D* plus the margin for at least `min_drop_s` (6 s). *D* is where the YAML's own signal model reaches the receiver floor (about 51.4 m for the default;
-  [SIGNAL_MODEL.md](SIGNAL_MODEL.md)). The simulation lets each vehicle follow its setpoint `tracking_lag_s` (1 s) late. Candidates are drawn from the seed until one qualifies (a median of 10 candidates over
-  40 seeds, at most 103; `tests/mesh_plan.sh`). Agent *i* flies at 8 m + 3 m x *i* above its arming point, so paths cannot collide.
-- **Shared timeline.** Each agent takes off, touches `/logs/<agent>.airborne` and hovers; when all four have, the first agent's supervisor creates `/logs/mesh_start` and every agent starts its path at that moment.
-  Setpoints are a function of the time since then, never of where the vehicle is, so the planned timeline holds for every agent. At the planned end time (all paths done plus `end_hold_s`, 5 s) every agent is hovering
-  over its spawn point and lands there.
-- **Heartbeat** (`ros2_ws/src/mesh_control`, `mesh_msgs/PeerState`): each agent publishes id, sequence number, send time, position and velocity at 5 Hz on `/mesh/peer_state` (domain 42, over `radio0`) and subscribes to
-  everyone's. A neighbour not heard for `link_timeout_s` (1.5 s) is **LOST**; heard again, **UP**. The radio firewall and the isolation checks are unchanged: only domain-42 traffic crosses the channel.
-- **Terrain.** `heading_sectors_deg` restricts where the paths may go: waypoints, and the straight legs between them, beyond `roam_radius_m` + 3 m (23 m) of the centre must lie in these arcs. The Baylands YAML uses it
-  (below).
+Fly it in Baylands with the Gazebo GUI and the live signal map:
 
-## What happens in `excursion` mode
+```bash
+demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml
+```
 
-`wanderers` (default: the last agent) fly; every other agent is an anchor that hovers at its spawn point. The wanderer flies `random_waypoints` random points where every link is up, an outbound point just outside
-`roam_radius_m` on the excursion heading, the **excursion point** where it hovers `dwell_s` (10 s), back through the outbound point, more random points, home, land. The excursion point is chosen so that exactly
-*k* anchor links (1 or 2, from `excursion_links` and the seed) end more than `margin_m` beyond *D* and the others more than `margin_m` inside it. The anchors land once every wanderer has landed.
+Fly another seed without editing the YAML:
 
-## Mixed fleet: drones and rovers (roam mode only)
+```bash
+MESH_SEED=11 tests/containers_mesh_dropout.sh
+```
 
-An agent with `vehicle: r1_rover` ([CONTAINERS.md](CONTAINERS.md), "Vehicle types") is a ground vehicle (the Aion R1 in Gazebo). The planner treats it differently from a drone:
+Outputs in the log directory:
 
-- **Speed and arena.** It moves at `rover_speed_mps` (default 1.0) and draws its waypoints within `rover_arena_radius_m` (default 6.0) of its **own** spawn point, not within the shared arena, with the same minimum leg
-  (3 m) and `min_flight_s`. It has no altitude (0) and ignores `heading_sectors_deg`.
-- **Excursion.** The `excursion_agent` must be a drone: the trip beyond range is flown, and at 1 m/s a rover would need about 25 s each way. A plan with rovers needs `mode: roam`.
-- **Control.** `mesh_control/mesh_drive.py` follows the planned path on the same shared timeline as the drones (it touches `<agent>.airborne` when armed and ready, then waits for `mesh_start`). It sends PX4's
-  generic offboard position setpoint, moving at the planned speed ([rover_drive.py](../ros2_ws/src/px4_offboard_control/px4_offboard_control/rover_drive.py) explains why).
-- **Checks.** The pass criteria below apply unchanged, except the flight row: a rover is checked for arming in offboard mode, completing its route and disarming, and for being within 2.0 m of its spawn point
-  when its route ended (5.0 m after it disarmed). Distances in the model are 3-D with the rover at its spawn height.
+| File | Contents |
+|---|---|
+| `mesh_dropout.png` | Modelled signal and heartbeat events over time, distances, paths |
+| `comm_map_dropout.png` | The signal map before, at the deepest dropout and after |
+| `mesh_report.json` | All numbers and check results |
+| `mesh_plan.json` | The plan flown |
+| `mesh/` | Per-agent heartbeat logs `mesh_rx_<agent>.csv` and `mesh_events_<agent>.csv` |
 
-`config/experiments/drone_rover_mesh_baylands.yaml` is the shipped example: a drone (agent1, the excursion agent) and a rover (agent2) in Baylands, 7.1 m apart, Tx power 4 dBm (dropout at 20.5 m).
-`config/experiments/two_drone_two_rover_mesh_baylands.yaml` is a fleet of four with the same radio settings: two drones (agent1, the excursion agent, and agent2) and two rovers (agent3, agent4) in a diamond. The planner has no
-collision avoidance on the ground, so that config keeps the rovers apart by layout: `rover_arena_radius_m` is 4.0 and the rovers' spawn points are 10 m apart, which leaves 2 m between their discs; each drone's spawn point is 2.4 m from both discs.
-A rover disc must be larger than the planner's 3 m minimum leg: with `rover_arena_radius_m: 3.0` no path can be drawn and the planner stops with an error.
-`tests/mesh_plan.sh --config` it checks the plans for 40 seeds (mode excursion is skipped for rovers). Not known: whether the ground within the rover's arena is free of obstacles anywhere but near the spawn point; the
-Baylands world has structures, and the planner has no ground-level obstacle map. A run reports it as a failure if the rover stops short.
+## Modes
 
-## YAML (`scenario`, see also [CONFIGURATION.md](CONFIGURATION.md))
+`scenario.mesh_dropout.mode` selects the mode:
 
-`scenario.type: mesh_dropout` selects the stack; leader-follower remains the default when the key is absent. Keys under `scenario.mesh_dropout`, all optional, defaults in `orchestrator/mesh_plan.py`
-(the shipped YAMLs list them with comments): `mode`, `seed`, `altitude_base_m`, `altitude_step_m`, `speed_mps`, `rover_speed_mps`, `rover_arena_radius_m`, `heartbeat_hz`, `link_timeout_s`, `margin_m`; roam mode: `arena_radius_m`, `max_dropped_links`, `min_isolation_s`, `excursion_agent`, `excursion_extra_m`, `excursion_pre_waypoints`,
-`min_drop_events`, `min_drop_s`, `min_flight_s`, `end_hold_s`, `tracking_lag_s`, `max_attempts`; excursion mode: `wanderers`, `random_waypoints`, `roam_radius_m`, `excursion_links`, `dwell_s`, `heading_deg`;
-both: `heading_sectors_deg`. The heartbeat QoS is `swarm.qos.peer_state` (default best_effort, volatile, **depth 10**). A plan that cannot be built is rejected with a message (unknown agent or mode, a margin no
-direction allows, no plan with the requested drops within `max_attempts`, ...).
+| Mode | Behaviour |
+|---|---|
+| `roam` (default) | Every agent moves on its own random path |
+| `excursion` | One agent, the wanderer, flies out of range of 1 or 2 hovering agents; the others hover |
 
-## Pass criteria (fixed before the first run; `tools/analyze_mesh_dropout.py`)
+The scenario reuses two parts of the leader-follower stack: PX4's offboard base class and the vehicle-state reader.
+
+## Roam mode
+
+### Plan
+
+`orchestrator/mesh_plan.py` computes the plan. It is a pure function of the YAML, including the seed, so every
+container computes the same plan.
+
+1. Each agent draws random waypoints inside `arena_radius_m` of the centre of the spawn points until its path lasts at
+   least `min_flight_s` at `speed_mps`. It then returns to its spawn point.
+2. The planner simulates the whole flight, with each vehicle following its setpoint `tracking_lag_s` late.
+3. The planner keeps the candidate only if both conditions in the table below hold. Otherwise it draws the next
+   candidate from the seed.
+
+| Condition | Definition |
+|---|---|
+| At-risk limit | Never more than `max_dropped_links` links at risk at once. A link is at risk when its 3-D distance exceeds *D* - `margin_m`. |
+| Clear drops | At least `min_drop_events` clear drops. A drop is clear when the distance exceeds *D* + `margin_m` for at least `min_drop_s`. |
+
+*D* is the distance at which the YAML's signal model reaches the receiver floor: about 51.4 m for the default radio.
+See [SIGNAL_MODEL.md](SIGNAL_MODEL.md).
+
+Agent *i* flies at `altitude_base_m` + *i* x `altitude_step_m` above its arming point, so paths cannot collide.
+
+`heading_sectors_deg` restricts where paths may go. Waypoints, and the straight legs between them, that lie beyond
+`roam_radius_m` + 3 m of the centre must fall inside the listed arcs. The Baylands configuration uses it to avoid
+terrain.
+
+### Shared timeline
+
+1. Each agent takes off, creates `/logs/<agent>.airborne` and hovers.
+2. When every agent has done so, the first agent's supervisor creates `/logs/mesh_start`.
+3. Every agent starts its path at that moment. Setpoints are a function of the time since the start, never of the
+   vehicle's position, so the planned timeline holds for every agent.
+4. At the planned end time, which is the end of all paths plus `end_hold_s`, every agent hovers over its spawn point
+   and lands.
+
+### Heartbeat
+
+Each agent publishes `mesh_msgs/PeerState` on `/mesh/peer_state` at `heartbeat_hz` and subscribes to everyone's. The
+message holds the sender id, sequence number, send time, position and velocity. The node is `mesh_node` in
+`ros2_ws/src/mesh_control`.
+
+| Event | Definition |
+|---|---|
+| `LOST` | A neighbour is not heard for `link_timeout_s` |
+| `UP` | A neighbour is heard for the first time, or again after `LOST` |
+
+The topic uses DDS domain 42 over `radio0`. The radio firewall and the isolation checks are unchanged.
+
+## Excursion mode
+
+The agents in `wanderers` (default: the last agent) fly. Every other agent is an anchor that hovers at its spawn point.
+
+A wanderer flies this sequence:
+
+1. `random_waypoints` random points where every link is up.
+2. An outbound point just outside `roam_radius_m`, on the excursion heading.
+3. The excursion point, where it hovers for `dwell_s`.
+4. Back through the outbound point, then `random_waypoints` more random points, then home, then landing.
+
+The excursion point is chosen so that exactly *k* anchor links end more than `margin_m` beyond *D*, and the others stay
+more than `margin_m` inside it. *k* is drawn from `excursion_links` with the seed. The anchors land once every wanderer
+has landed.
+
+## Full isolation of one agent
+
+In roam mode, `excursion_agent` and `min_isolation_s` make one drone lose every link at once. The shipped
+configurations `four_agent_mesh_dropout.yaml` and `four_agent_mesh_dropout_baylands.yaml` use `excursion_agent: agent3`,
+`min_isolation_s: 12`, `max_dropped_links: 3` and `arena_radius_m: 8`.
+
+- The planner requires the excursion agent to be beyond *D* + `margin_m` of all other agents for at least
+  `min_isolation_s`.
+- The other agents roam within `arena_radius_m` of the centre. With 8 m, two agents are at most 16 m apart in the plane,
+  against *D* - `margin_m` = 17.5 m, so their mutual links stay up.
+- The excursion agent flies `excursion_pre_waypoints` random points inside the arena. It then flies straight to one
+  point
+  at *D* + `margin_m` + `excursion_extra_m` from the centre, holds there for `min_isolation_s` + 4 s and flies home.
+- The planner keeps a candidate only if the simulation of everyone's lagged positions confirms the isolation.
+- Legs shorter than 3 m are rejected. Plan times are rounded to 0.01 s, so a 1 m leg would carry a speed error above
+  3 %.
+
+The shipped configurations lower the transmit power from 16 dBm to 4 dBm to keep the trip short. *D* is then 20.5 m
+instead of 51.4 m, from the same equation: 4 dBm - 46.68 dB - 30 log10(d) = -82 dBm. The excursion point is 25.5 m from
+the centre for seed 7.
+
+The noise floor is unchanged. The cutoff is the -82 dBm preamble-detection threshold, which lies above the noise floor
+plus 4 dB (-90 dBm).
+
+Excursion mode needs the larger range. Run it with `tx_power_dbm: 16.0` and without `excursion_agent`, as
+`tests/mesh_plan.sh` does.
+
+## Mixed fleet
+
+An agent with `vehicle: r1_rover` is a ground vehicle, the Aion R1 in Gazebo. See "Vehicle types" in
+[CONTAINERS.md](CONTAINERS.md). Rovers require `mode: roam`. The planner treats a rover differently from a drone:
+
+| Aspect | Rover behaviour |
+|---|---|
+| Speed | `rover_speed_mps` (default 1.0) |
+| Arena | Waypoints within `rover_arena_radius_m` (default 6.0) of its own spawn point, with the same 3 m minimum leg and `min_flight_s` |
+| Altitude and terrain arcs | Altitude 0; `heading_sectors_deg` is ignored |
+| Excursion | A rover cannot be the `excursion_agent`: at 1 m/s the trip would take about 25 s each way |
+| Control | `mesh_drive` in `ros2_ws/src/mesh_control` follows the planned path on the shared timeline |
+| Ready signal | It creates `<agent>.airborne` when it is armed and ready, then waits for `mesh_start` |
+| Setpoint | PX4's generic offboard position setpoint, moving at the planned speed |
+| Distances | 3-D in the model, with the rover at its spawn height |
+
+`config/experiments/drone_rover_mesh_baylands.yaml` is the shipped example: a drone (agent1, the excursion agent) and a
+rover (agent2) in Baylands, 7.1 m apart, with a transmit power of 4 dBm.
+
+`config/experiments/two_drone_two_rover_mesh_baylands.yaml` is a fleet of four with the same radio settings: two drones
+(agent1, the excursion agent, and agent2) and two rovers (agent3, agent4) in a diamond.
+
+- The planner has no collision avoidance on the ground, so the layout keeps the rovers apart. `rover_arena_radius_m` is
+  4.0 and the rovers' spawn points are 10 m apart, which leaves 2 m between their discs. Each drone's spawn point is
+  2.4 m from both discs.
+- A rover disc must be larger than the planner's 3 m minimum leg. With `rover_arena_radius_m: 3.0`, no path can be
+  drawn and the planner stops with an error.
+
+## Configuration keys
+
+`scenario.type: mesh_dropout` selects the scenario. All keys under `scenario.mesh_dropout` are optional. The defaults
+are in `orchestrator/mesh_plan.py`. An unknown key, or a plan that cannot be built, is rejected with a message before
+anything starts.
+
+| Key | Default | Mode | Meaning |
+|---|---|---|---|
+| `mode` | `roam` | Both | `roam` or `excursion` |
+| `seed` | 1 | Both | Seed of every random draw |
+| `altitude_base_m`, `altitude_step_m` | 8.0, 3.0 | Both | Agent *i* flies at base + *i* x step |
+| `speed_mps` | 3.0 | Both | Speed of multirotors |
+| `heartbeat_hz` | 5.0 | Both | Heartbeat rate |
+| `link_timeout_s` | 1.5 | Both | Silence after which a neighbour is `LOST` |
+| `margin_m` | 3.0 | Both | Margin around *D* |
+| `heading_sectors_deg` | None | Both | Allowed `[from, to]` arcs in degrees, ENU: 0 is east, 90 is north |
+| `arena_radius_m` | 40.0 | Roam | Radius within which waypoints are drawn |
+| `max_dropped_links` | 2 | Roam | Most links at risk at once |
+| `min_drop_events`, `min_drop_s` | 2, 6.0 | Roam | Number and duration of clear drops |
+| `min_flight_s` | 70.0 | Roam | Minimum path duration |
+| `end_hold_s` | 5.0 | Roam | Hover at home before landing |
+| `tracking_lag_s` | 1.0 | Roam | How late a vehicle follows its setpoint in the planner's simulation |
+| `max_attempts` | 50000 | Roam | Candidate plans tried before giving up |
+| `excursion_agent` | None | Roam | Agent that is cut off from all others |
+| `excursion_extra_m`, `excursion_pre_waypoints` | 2.0, 2 | Roam | Extra distance of the excursion point; random points before the trip |
+| `min_isolation_s` | 0.0 | Roam | Required duration of full isolation; 0 disables it |
+| `rover_speed_mps`, `rover_arena_radius_m` | 1.0, 6.0 | Roam | Speed and arena of rovers |
+| `wanderers` | Last agent | Excursion | Agents that fly |
+| `random_waypoints` | 3 | Excursion | Random points before and after the excursion |
+| `roam_radius_m` | 20.0 | Excursion | Radius of the random points |
+| `excursion_links` | `[1, 2]` | Excursion | Possible numbers of links to drop |
+| `dwell_s` | 10.0 | Excursion | Hover time at the excursion point |
+| `heading_deg` | From the seed | Excursion | Fixed excursion heading |
+| `max_excursion_m` | 250.0 | Excursion | Largest excursion distance |
+
+The heartbeat QoS is `swarm.qos.peer_state`. See [CONFIGURATION.md](CONFIGURATION.md).
+
+## Pass criteria
+
+`tools/analyze_mesh_dropout.py` applies the criteria. They were fixed before the first run, except for the changes in
+the second table.
 
 | Group | Criterion |
 |---|---|
-| Flights | every agent reached its altitude, landed and disarmed; was within 2.0 m (horizontal) of its spawn point when its landing began; ended within 5.0 m of it after touchdown |
-| Modelled, roam | at least one link falls below the receiver floor for at least 3 s and recovers; every link is above the floor at the end; never more than `max_dropped_links` links below it at once (from ns-3's `pair_rssi.csv`) |
-| Measured, roam, when `min_isolation_s` > 0 | one agent had every neighbour LOST at the same time, from its own heartbeat log (added 2026-10-21 with the isolation option; fixed before its first run) |
-| Modelled, excursion | links to the planned dropped anchors go below the floor and later recover; every other link never goes below it |
-| Measured (heartbeats) | for every modelled drop lasting at least `link_timeout_s` + 1 s (roam), or every planned dropped link (excursion), in both directions: LOST within [-1.0 s, `link_timeout_s` + 2.0 s] of the modelled drop, then UP within [-1.0 s, 10 s] of the modelled recovery; and every LOST event of the run falls where the model has the signal below the floor |
-| Validity | ns-3 lag within `time.max_lag_ms`; the simulator's real-time factor over 5 s at least `time.min_rtf` from take-off ([ARCHITECTURE.md](ARCHITECTURE.md), "Run validity"); Gazebo: its own `/stats` factor; Isaac Sim (experimental): taken from the pose feed ([EXPERIMENTS.md](EXPERIMENTS.md), "Isaac Sim: four multirotors"); no source fails the check |
-| Isolation | no domain-0, XRCE or PX4-topic traffic on the channel; the swarm domain and the mesh topic are present |
+| Flights | Every agent reaches its altitude, lands and disarms |
+| Flights | Every agent is within 2.0 m (horizontal) of its spawn point when its landing begins, and within 5.0 m after touchdown |
+| Flights, rover | A rover arms in offboard mode, completes its route and disarms, with the same 2.0 m and 5.0 m limits at the end of its route and after it disarms |
+| Modelled, roam | At least one link falls below the receiver floor for at least 3 s and recovers |
+| Modelled, roam | Every link is above the floor at the end, and never more than `max_dropped_links` links are below it at once |
+| Measured, roam, `min_isolation_s` > 0 | One agent has every neighbour `LOST` at the same time, in its own heartbeat log |
+| Modelled, excursion | Links to the planned dropped anchors go below the floor and recover; every other link stays above it |
+| Measured | `LOST` falls within [-1.0 s, `link_timeout_s` + 2.0 s] of each modelled drop, in both directions |
+| Measured | `UP` falls within [-1.0 s, 10 s] of each modelled recovery, in both directions |
+| Measured | Every `LOST` event of the run falls where the model has the signal below the floor |
+| Validity | ns-3 lag within `time.max_lag_ms`; the simulator's real-time factor over 5 s at least `time.min_rtf` from take-off |
+| Isolation | No domain-0, XRCE or PX4-topic traffic on the channel; the swarm domain and the mesh topic are present |
 
-The end-position limit was 2.0 m until 2026-10-21. A Baylands run then failed it by 0.17 m although the agent had hovered 0.10 m from its spawn point when landing began: after touchdown the vehicle was bumped 2.2 m by the
-ground contact. The check is now split as in the table (the 2.0 m limit applies at the start of landing; 5.0 m is only a sanity bound for a crash or fly-away after touchdown). This was changed after seeing the result.
+The real-time factor is Gazebo's own `/stats` factor. For Isaac Sim (experimental) it comes from the pose feed; see
+[EXPERIMENTS.md](EXPERIMENTS.md). A run without a real-time-factor source fails the check.
 
-## Results (single runs, 2026-10-21, seed 7)
+The measured criteria apply to every modelled drop that lasts at least `link_timeout_s` + 1 s (roam) or to every planned
+dropped link (excursion). The modelled values come from ns-3's `pair_rssi.csv`.
 
-| Run | Mode, config | Modelled drops (planned clear drops) | Heartbeat detection after modelled drop | Back after modelled recovery | Checks |
-|---|---|---|---|---|---|
-| Flat world, headless | roam, `four_agent_mesh_dropout.yaml` | 6 (2); never more than 2 links down at once | +1.0 to +1.4 s | -0.5 to +0.7 s | all pass; 14 LOST events, all explained; ns-3 lag max 0.092 ms; RTF worst window 0.996 |
-| Baylands, headless, run twice | roam, `..._baylands.yaml` | 2 (2) | +1.0 to +1.2 s | -0.1 to +0.7 s | all pass both times; RTF 0.997 and 0.999 |
-| Baylands, GUI + live map | roam, same | 2 (2) | +1.2 to +1.4 s | -0.4 to +0.4 s | 29 of 29 with the current criteria (28 of 29 with the earlier end-position limit, see above); RTF 0.994; GUI and map did not crash |
-| Flat world, headless | excursion, seed 7 | 2 planned links | +1.0 to +1.5 s | -0.1 to 0.0 s | all pass |
-| Baylands, headless and with GUI + map | excursion, seed 7 | 2 planned links | +0.9 to +1.5 s | -0.1 to +0.5 s | all pass (36 and 32 checks) |
-
-Hover accuracy when landing began: 0.01 to 0.13 m for every agent in the roam runs. In the Baylands roam runs the plan predicted the drops well: the planned clear drops at plan times 10 to 19 s and 12 to 18 s appeared
-in the model at ns-3 times 49 to 59 s and 50 to 58 s, a constant offset of about 39 s (the shared start comes after take-off). In the flat roam run the model shows 6 drops where the plan guarantees 2: links that cross
-*D* without exceeding *D* plus the margin are not counted as "clear" by the planner but are real drops.
-Heartbeat latency: median about 1.2 ms; the 99th percentile was 2.0 to 2.4 ms in the Baylands runs and 11.3 ms in the flat roam run, whose links spent more time near the floor (frames at about -80 dBm need
-retransmissions); that is an observation, not a tested explanation.
-`tests/mesh_plan.sh` passes for both configs, both modes, 40 seeds each: repeatable; an independent re-simulation from the plan files confirms the at-risk limit, the clear drops, paths that start and end at the spawn
-point at the planned speed and stay inside the allowed area; excursions drop exactly *k* links with the margin.
-These are single runs on one machine; they are not statistics.
-
-### Full isolation of one drone (`min_isolation_s`, `excursion_agent`; 2026-10-21)
-
-The shipped configs (`four_agent_mesh_dropout*.yaml`) make one drone, `excursion_agent: agent3`, lose every link at once. The planner requires it to be beyond *D* + `margin_m`
-of **all** the others for at least `min_isolation_s` (12 s) and allows up to 3 links at risk (`max_dropped_links: 3`). The other three agents roam only `arena_radius_m` = 8 m
-around the centre of the spawn points, which keeps their mutual links up (two agents at most 16 m apart in the plane, against *D* - margin = 17.5 m; the altitude offsets can add a
-little). The excursion agent flies `excursion_pre_waypoints` (2) random points inside that arena, then straight out to one point at *D* + `margin_m` + `excursion_extra_m` (2 m)
-from the centre in a seeded direction (inside `heading_sectors_deg` where those apply), holds there for `min_isolation_s` + 4 s, and flies home. A candidate plan is kept only if the
-independent simulation of everyone's lagged positions confirms the isolation. Its trip is therefore as short as the radio range allows: 25.5 m from the centre for seed 7.
-
-To keep the trip short the shipped configs lower the transmit power from 16 to 4 dBm, so *D* is 20.5 m instead of 51.4 m (same chain: 4 dBm - 46.68 dB - 30 log10(d) = -82 dBm).
-The noise floor was not changed: the cutoff is the -82 dBm preamble-detection threshold, which sits above noise + 4 dB (-90 dBm), so a lower noise floor would not add
-disconnections and a higher one would only matter above about -86 dBm. Excursion mode needs the larger range; run it with `tx_power_dbm: 16.0` and without `excursion_agent`
-(the offline test does).
-
-| Run | Config, command | Result |
+| Date | Criterion change | Reason |
 |---|---|---|
-| Single runs (two), seed 7, 2026-10-21 | `four_agent_mesh_dropout_baylands.yaml`, `demo/run_container_demo.sh --config ... --no-prompt` (GUI; one with the live map) | 36 of 36 checks each; plan: agent3 isolated at plan t = 14-27 s (109 candidate plans), 3 clear drops, peak pair distance 32 m, flight 48 s; measured: agent3 had all three neighbours LOST at once for 17.0 s and 17.5 s |
+| 2026-10-21 | The end-position check is split: 2.0 m when landing begins, 5.0 m after touchdown. It was 2.0 m after touchdown. | A Baylands run failed by 0.17 m although the agent hovered 0.10 m from its spawn point when landing began; ground contact bumped it 2.2 m after touchdown. This change was made after seeing the result. |
+| 2026-10-21 | The full-isolation criterion was added with the `min_isolation_s` option | Fixed before the first run that used the option |
 
-Offline, `tests/mesh_plan.sh` re-simulates 40 seeds for both configs: every plan isolates a drone for at least 12 s, the excursion point is at the stated radius, and the planner needed
-a median of 75-81 and at most 324 candidate plans. Legs shorter than 3 m (the way home included) are rejected: the plan's times are rounded to 0.01 s, so a leg of about 1 m would have a
-speed error over 3 % and a few centimetres a zero duration. The flat config was not flown in containers with these settings.
+## Results
 
-### Drone and rover in Baylands (2026-11-02, seed 7, single run)
+All results are single runs with seed 7 on the development machine, in Docker. They are not statistics.
 
-`tests/containers_mesh_dropout.sh --config config/experiments/drone_rover_mesh_baylands.yaml` (agent1 a drone and the excursion agent, agent2 an R1 rover, Tx 4 dBm, D = 20.5 m; Gazebo without the GUI): all checks passed.
-The plan was found on the first candidate (flight 47 s; planned drop of the one link at plan t = 13 to 34 s, peak 34 m). Measured: the drone was fully disconnected for 21.9 s; both heartbeat directions logged LOST
-1.1 and 1.2 s after the modelled drop and UP -0.1 and +0.1 s around the modelled recovery; the drone ended 0.05 m and the rover 0.41 m from their spawn points; ns-3 lag at most 0.44 ms; worst 5-s real-time-factor window 1.000.
-From the ground-truth poses: the drone flew 67 m (planned 65.6 m) and reached 22.7 m from its spawn point; the rover drove 32 m of the planned 42.4 m and got at most 5.2 m from its spawn point, so it cuts corners
-(the setpoint moves along the plan, the vehicle's own path controller smooths it). The comparison with the plan's length is not a criterion. Only this seed was flown; the plans of 40 seeds were checked offline.
+### Roam and excursion modes, 2026-10-21
 
-### Two drones and two rovers in Baylands (2026-11-10, seed 7, single run)
+These runs predate the full-isolation settings of the shipped configurations.
 
-`tests/containers_mesh_dropout.sh --config config/experiments/two_drone_two_rover_mesh_baylands.yaml` (agent1 and agent2 drones, agent1 the excursion agent; agent3 and agent4 R1 rovers; Tx 4 dBm, D = 20.5 m; Gazebo without the GUI;
-same development machine and images as the runs above): all checks passed.
-The plan was the 7th candidate (flight 54 s; planned clear drops of agent1's three links at plan t = 10 to 29 s, peaks 28 to 33 m). Measured: agent1 was fully disconnected for 18.3 s; the six heartbeat directions logged LOST
-0.9 to 1.3 s after the modelled drop and UP 0.1 to 0.6 s after the modelled recovery; no LOST event outside a modelled drop; the drones ended 0.02 and 0.04 m and the rovers 0.51 and 0.45 m from their spawn points; ns-3 lag at most 0.52 ms;
-worst 5-s real-time-factor window 0.998 (worst sample 0.91). In the plan the rovers never come closer than 6.1 m to each other (computed from the plan's waypoints; the driven separation was not measured).
-Offline, `tests/mesh_plan.sh --config` on this YAML passes for 40 seeds (at most 47 candidate plans, median 9). Only this seed was run; not run with the Gazebo GUI.
+| World, display | Mode | Modelled drops (planned clear drops) | `LOST` after modelled drop | `UP` relative to modelled recovery | Checks |
+|---|---|---|---|---|---|
+| Flat, headless | Roam | 6 (2) | +1.0 s to +1.4 s | -0.5 s to +0.7 s | All pass |
+| Baylands, headless, two runs | Roam | 2 (2) | +1.0 s to +1.2 s | -0.1 s to +0.7 s | All pass in both |
+| Baylands, GUI and map | Roam | 2 (2) | +1.2 s to +1.4 s | -0.4 s to +0.4 s | 29 of 29 |
+| Flat, headless | Excursion | 2 planned links | +1.0 s to +1.5 s | -0.1 s to 0.0 s | All pass |
+| Baylands, headless; GUI and map | Excursion | 2 planned links | +0.9 s to +1.5 s | -0.1 s to +0.5 s | All pass (36 and 32 checks) |
 
-## Choices and findings worth knowing
+Further measurements from those runs:
 
-- **Heartbeat history depth.** `PeerState` has no key, so a subscriber keeps one shared keep-last history for all senders. With depth 1 the first run saw agent4 miss 1 to 3 s of agent1's heartbeats throughout the flight,
-  at 6 m range (the earliest sender in each burst was overwritten by the later ones), which looked like random link loss. With depth 10 the only LOST events were real dropouts. A topic with several publishers needs a
-  history deeper than the number of senders.
-- **Discovery speed.** `config/dds/cyclonedds_mesh.xml` sets the participant announcement interval to 1 s (Cyclone's default is 30 s). With the default, a neighbour out of range for longer than the 10 s lease would
-  only be found again at its next announcement, up to 30 s after the signal returned. The shorter interval means the measured recovery follows the radio; it also sends about 30 times more discovery announcements, so it
-  is used only by this scenario. Recovery times above are with this setting and are not what an unmodified DDS would show.
-- **Detection is delayed by design**: LOST fires `link_timeout_s` after the last heartbeat, so about 1 to 1.5 s after the signal falls below the floor.
-- **Baylands terrain.** The world has structures (trees, buildings) up to roughly 15 to 25 m high at headings 300 to 340 degrees and about 14 m at 120 to 170 degrees within 75 m of the spawn area; the agents fly at 8 to 17 m.
-  The arcs in `heading_sectors_deg` are the headings whose ground and objects stay below 5 m out to 46 m, found by reading heights from the world's mesh files (accuracy about 1 m, measured against the spawn height,
-  not against Gazebo's collision geometry); no allowed cell was higher than 3.2 m. The plans flew without incident in the runs above; a different world needs its own check.
-- **Landing on the Baylands slope.** The ground near the triangle falls by a few tenths of a metre toward the east. In the Baylands roam runs the agent spawned at (5, 0) was bumped 0.6, 1.7 and 2.2 m after touchdown
-  (the vehicle was already disarmed), in three identical runs; the other three agents stayed within 0.2 m. This is simulator contact behaviour, not the control stack, and it is not repeatable. A later Baylands run with the GUI and the path markers had agent2 end 17.18 m from its spawn point (the 5.0 m after-touchdown bound failed; it was within 0.08 m when landing began). Two repeat runs, one with and one without markers, passed all 33 checks. The markers are GUI-only, so no link to them is expected, but with single runs it is not ruled out.
-- **Constant altitude, flat reference.** Flight altitude is constant per agent and distances assume the same flat reference as the rest of the framework.
-- **Shutdown artefact.** When the harness stops ns-3 after the last landing every link "drops"; the analyzer ignores events after the last agent has landed.
+| Quantity | Value |
+|---|---|
+| Flat roam run | Never more than 2 links down at once; 14 `LOST` events, all explained; ns-3 lag at most 0.092 ms; worst real-time-factor window 0.996 |
+| Baylands roam runs, worst real-time-factor window | 0.997 and 0.999 headless; 0.994 with the GUI |
+| Baylands roam run with the GUI | 28 of 29 under the earlier end-position limit; see [Pass criteria](#pass-criteria) |
+| Hover accuracy when landing began, roam runs | 0.01 m to 0.13 m for every agent |
+| Heartbeat latency, median | About 1.2 ms |
+| Heartbeat latency, 99th percentile | 2.0 ms to 2.4 ms in Baylands; 11.3 ms in the flat roam run |
 
-## Limits
+- In the Baylands roam runs, the planned clear drops at plan times 10 s to 19 s and 12 s to 18 s appeared in the model
+  at ns-3 times 49 s to 59 s and 50 s to 58 s. The offset of about 39 s is constant, because the shared start follows
+  take-off.
+- In the flat roam run, the model shows 6 drops where the plan guarantees 2. Links that cross *D* without exceeding
+  *D* + `margin_m` are real drops that the planner does not count as clear.
+- The links of the flat roam run spent more time near the floor, where frames at about -80 dBm need retransmissions.
+  That is an observation about its higher latency, not a tested explanation.
 
-Seed 7 is the only seed flown in the containers (the planners are checked for 40 seeds per mode). Excursion mode was flown with one wanderer. The scenario uses the Wi-Fi model of the YAML unchanged, so the dropout range is the
-one set by the log-distance model and the receiver floor, not a measured one. Not run: a world other than the flat one and Baylands, native (non-Docker) execution, more than four agents, more than two rovers, two rovers whose discs overlap, a rover in the live demo with the Gazebo GUI.
+### Full isolation, 2026-10-21
+
+| Configuration | Command | Outcome |
+|---|---|---|
+| `four_agent_mesh_dropout_baylands.yaml` | `demo/run_container_demo.sh --config ... --no-prompt`, two runs with the GUI, one with the live map | 36 of 36 checks in each |
+
+Plan: agent3 isolated at plan times 14 s to 27 s, found after 109 candidates; 3 clear drops; peak pair distance 32 m;
+flight 48 s. Measured: agent3 had all three neighbours `LOST` at once for 17.0 s and 17.5 s.
+
+### Drone and rover in Baylands, 2026-11-02
+
+| Configuration | Command | Outcome |
+|---|---|---|
+| `drone_rover_mesh_baylands.yaml` | `tests/containers_mesh_dropout.sh --config ...`, headless | All checks pass |
+
+| Quantity | Value |
+|---|---|
+| Plan | First candidate; flight 47 s; the one link drops at plan times 13 s to 34 s, peak 34 m |
+| Drone disconnected | 21.9 s |
+| `LOST` after the modelled drop | 1.1 s and 1.2 s |
+| `UP` relative to the modelled recovery | -0.1 s and +0.1 s |
+| Distance from spawn at the end | Drone 0.05 m, rover 0.41 m |
+| ns-3 lag; worst 5 s real-time-factor window | At most 0.44 ms; 1.000 |
+| Drone path, from ground truth | 67 m flown (planned 65.6 m), 22.7 m from its spawn point at most |
+| Rover path, from ground truth | 32 m driven of 42.4 m planned, 5.2 m from its spawn point at most |
+
+The rover cuts corners: the setpoint moves along the plan and the vehicle's own path controller smooths it. The
+comparison with the planned length is not a criterion.
+
+### Two drones and two rovers in Baylands, 2026-11-10
+
+| Configuration | Command | Outcome |
+|---|---|---|
+| `two_drone_two_rover_mesh_baylands.yaml` | `tests/containers_mesh_dropout.sh --config ...`, headless | All checks pass |
+
+| Quantity | Value |
+|---|---|
+| Plan | Seventh candidate; flight 54 s; agent1's three links drop at plan times 10 s to 29 s, peaks 28 m to 33 m |
+| agent1 disconnected | 18.3 s |
+| `LOST` after the modelled drop, six directions | 0.9 s to 1.3 s |
+| `UP` after the modelled recovery | 0.1 s to 0.6 s |
+| Distance from spawn at the end | Drones 0.02 m and 0.04 m; rovers 0.51 m and 0.45 m |
+| ns-3 lag; worst 5 s real-time-factor window | At most 0.52 ms; 0.998 (worst sample 0.91) |
+| Closest planned approach of the two rovers | 6.1 m, computed from the plan's waypoints |
+
+No `LOST` event fell outside a modelled drop. The driven separation of the rovers is not measured.
+
+### Offline plan checks
+
+`tests/mesh_plan.sh` re-simulates the plans from the plan files, independently of the planner, for 40 seeds per mode.
+
+| Configuration | Outcome |
+|---|---|
+| Both `four_agent_mesh_dropout` files, both modes | Pass: plans are repeatable and differ per seed; the at-risk limit, clear drops, speed, start and end points and allowed area are confirmed |
+| The same files, full isolation | Every plan isolates a drone for at least 12 s; the planner needs a median of 75 to 81 and at most 324 candidates |
+| The same files, excursion mode | Every plan drops exactly *k* links with the margin |
+| `drone_rover_mesh_baylands.yaml` | Pass for 40 seeds; excursion mode is skipped for rovers |
+| `two_drone_two_rover_mesh_baylands.yaml` | Pass for 40 seeds; a median of 9 and at most 47 candidates |
+
+Before the full-isolation settings were added to the shipped configurations, the planner needed a median of 10 and at
+most 103 candidates over 40 seeds.
+
+## Design notes
+
+| Topic | Note |
+|---|---|
+| Heartbeat history depth | `PeerState` has no key, so a subscriber keeps one keep-last history for all senders. With depth 1, simultaneous heartbeats overwrite each other; depth 10 is the default. |
+| Discovery speed | `config/dds/cyclonedds_mesh.xml` sets the participant announcement interval to 1 s. Cyclone's default is 30 s. |
+| Detection delay | `LOST` fires `link_timeout_s` after the last heartbeat, so about 1 s to 1.5 s after the signal falls below the floor. |
+| Altitude | Each agent flies at a constant altitude. Distances assume the same flat reference as the rest of the framework. |
+| Shutdown | When the harness stops ns-3 after the last landing, every link drops. The analyzer ignores events after the last agent lands. |
+
+Heartbeat history depth: in the first run with depth 1, agent4 missed 1 s to 3 s of agent1's heartbeats throughout the
+flight at 6 m range, which looked like random link loss. A topic with several publishers needs a history deeper than
+the number of senders.
+
+Discovery speed: with the default interval, a neighbour that is out of range for longer than the 10 s lease is found
+again only at its next announcement, up to 30 s after the signal returns. The shorter interval makes the measured
+recovery follow the radio. It also sends about 30 times more discovery announcements, so only this scenario uses it.
+The recovery times above are not what an unmodified DDS configuration shows.
+
+Baylands terrain: the world has structures up to roughly 15 m to 25 m high at headings 300 to 340 degrees, and about
+14 m at 120 to 170 degrees, within 75 m of the spawn area. The agents fly at 8 m to 17 m. The arcs in
+`heading_sectors_deg` are the headings whose ground and objects stay below 5 m out to 46 m. They were found by reading
+heights from the world's mesh files, with an accuracy of about 1 m against the spawn height. No allowed cell is higher
+than 3.2 m.
+
+## Limitations
+
+- Seed 7 is the only seed flown. The planners are checked offline for 40 seeds per mode.
+- Excursion mode is flown with one wanderer only.
+- The flat configuration is not flown with the full-isolation settings.
+- The dropout range is the one set by the log-distance model and the receiver floor. It is not a measured range.
+- Not tested: a world other than the flat one and Baylands, native execution, more than four agents, more than two
+  rovers, two rovers whose discs overlap, a rover in the demo with the Gazebo GUI.
+- A fixed-wing agent (`rc_cessna`, node `mesh_plane`) is work in progress. It has no passing run.
+- The planner has no ground-level obstacle map. Whether the ground in a rover's arena is free of obstacles is not
+  known; a run fails if the rover stops short.
+- The Baylands terrain check uses mesh heights, not Gazebo's collision geometry. A different world needs its own check.
+- Landing on the Baylands slope is not repeatable. In three identical roam runs, the agent spawned at (5, 0) was bumped
+  0.6 m, 1.7 m and 2.2 m after touchdown, when it was already disarmed; the others stayed within 0.2 m.
+- In one later Baylands run with the GUI and path markers, agent2 ended 17.18 m from its spawn point and failed the
+  5.0 m bound; it was within 0.08 m when landing began. Two repeat runs, one with markers and one without, passed all
+  33 checks. The markers exist only in the GUI, so no link is expected, but single runs do not rule one out.
