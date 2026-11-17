@@ -1,139 +1,188 @@
 # Architecture
 
+How the cosimulator couples a physics simulator, per-robot software stacks and an ns-3 wireless channel, and which
+modelling assumptions each part makes.
+
 ![Software architecture](architecture/architecture.png)
 
-*Conceptual architecture. The physics simulator provides each agent's PX4 SITL with sensor data and receives motor commands, and publishes
-ground-truth poses that drive each agent's mobility model in the network simulator. ROS 2 traffic between agents is carried by the network
-simulator's wireless model through a TapBridge. Two deployments implement it: the native one, where the "containers" are host processes in per-agent Linux network
-namespaces, and the Docker one, where they are real containers ([CONTAINERS.md](CONTAINERS.md)). The ROS 2 control layer is split as described below.*
+*Conceptual architecture. The physics simulator exchanges sensor data and motor commands with each agent's PX4 SITL and
+publishes ground-truth poses. The poses drive each agent's position in the network simulator. ROS 2 traffic between
+agents crosses the network simulator's wireless model through a TapBridge.*
+
+## Contents
+
+- [Overview](#overview)
+- [Deployments](#deployments)
+- [Components](#components)
+- [Wireless emulation path](#wireless-emulation-path)
+- [Position feed](#position-feed)
+- [Management network](#management-network)
+- [Software inside each robot](#software-inside-each-robot)
+- [Swarm protocol](#swarm-protocol)
+- [Run validity](#run-validity)
+- [Limitations](#limitations)
 
 ## Overview
 
 The cosimulator couples three independent parts:
 
-1. **A physics simulator** (Gazebo Harmonic) that provides vehicle dynamics and ground-truth poses.
-2. **Per-robot software stacks** (PX4 SITL, ROS 2 nodes), each in its own Linux network namespace.
-3. **A wireless channel emulator** (ns-3, 802.11a) through which all robot-to-robot traffic passes.
+1. A **physics simulator** (Gazebo Harmonic) provides vehicle dynamics and ground-truth poses.
+2. A **per-robot software stack** (PX4 SITL and ROS 2 nodes) runs in its own Linux network namespace or container.
+3. A **wireless channel emulator** (ns-3 3.48) carries all robot-to-robot traffic.
 
-Packets from real ROS 2 processes cross a simulated Wi-Fi channel; the simulator only supplies positions. Robots have
-no network path to each other other than through ns-3. This is checked by the isolation tests (see [EXPERIMENTS.md](EXPERIMENTS.md)).
+Packets from real ROS 2 processes cross a simulated Wi-Fi channel. The physics simulator supplies only positions.
+Robots have no network path to each other except through ns-3; the isolation tests in [EXPERIMENTS.md](EXPERIMENTS.md)
+check this.
 
 ## Deployments
 
-The same experiment YAML, ns-3 scenario, agent software and tests run two ways:
+The same experiment YAML, ns-3 scenario, agent software and analysis run in two deployments:
 
-| | Native | Docker Compose |
+| Item | Native | Docker Compose |
 |---|---|---|
-| Agent isolation | Linux network namespace per agent (`orchestrator/wire.py`) | One container per agent, private link network to ns-3 (`orchestrator/container_net.py`) |
+| Agent isolation | One network namespace per agent (`orchestrator/wire.py`) | One container per agent (`orchestrator/container_net.py`) |
 | ns-3 | Host process | `ns3` container |
 | Physics simulator | Host process | `simulator` container |
-| Needs on the host | ROS 2, Gazebo, PX4 runtime, ns-3 build, root or user namespaces | Docker only |
-| Run with | `tests/leader_follower_fly.sh` | `tests/containers_leader_follower.sh` |
+| Needs on the host | ROS 2, Gazebo, PX4 runtime, ns-3 build, root or user namespaces | Docker |
+| Example command | `tests/leader_follower_fly.sh` | `tests/containers_leader_follower.sh` |
 
-The wireless emulation path, DDS domains, swarm protocol and run-validity checks below are identical in both.
+The emulation path, DDS domains, swarm protocol and validity checks below are identical in both.
+[CONTAINERS.md](CONTAINERS.md) describes the Docker deployment.
 
 ## Components
 
 | Component | Location | Role |
 |---|---|---|
-| ns-3 scenario | `ns3/scenarios/wifi_adhoc_tap` | One *ghost node* per robot on a shared 802.11 channel; one TapBridge per ghost node; applies robot positions from the pose feed |
-| Network wiring | `orchestrator/wire.py` | Creates per-robot namespaces, TAP devices, bridges, veth pairs, the management network and the radio firewall |
-| Stack launcher | `orchestrator/run_stack.py` | Starts Gazebo, then a XRCE-DDS agent and a PX4 SITL instance per robot inside its namespace |
-| Fleet roles | `orchestrator/fleet.py` | Resolves leader, followers and formation offsets from the experiment YAML |
-| Pose bridge | `adapters/gazebo/pose_bridge.py` | Streams Gazebo poses (and real-time factor) to ns-3 |
-| Swarm node | `ros2_ws/src/swarm_control` | The only node that talks over the radio; leader publishes, followers subscribe |
-| Flight nodes | `ros2_ws/src/px4_offboard_control` | Offboard control of PX4 (trajectories, follower tracking); local only |
-| Message definition | `ros2_ws/src/swarm_msgs` | `LeaderState` |
+| ns-3 scenario | `ns3/scenarios/wifi_adhoc_tap` | One ghost node per robot on a shared 802.11 channel, one TapBridge per node |
+| Network wiring | `orchestrator/wire.py` | Namespaces, TAP devices, bridges, management network, radio firewall |
+| Stack launcher | `orchestrator/run_stack.py` | Starts Gazebo, then an XRCE-DDS agent and a PX4 SITL instance per robot |
+| Fleet roles | `orchestrator/fleet.py` | Resolves leader, followers, formation offsets and topic QoS from the YAML |
+| Pose bridge | `adapters/gazebo/pose_bridge.py` | Streams Gazebo poses and the real-time factor to ns-3 |
+| Swarm node | `ros2_ws/src/swarm_control` | Leader-follower radio node: the leader publishes, followers subscribe |
+| Mesh node | `ros2_ws/src/mesh_control` | Mesh-dropout radio node: all-to-all heartbeat |
+| Flight nodes | `ros2_ws/src/px4_offboard_control` | Offboard control of PX4 on the local domain |
+| Messages | `ros2_ws/src/swarm_msgs`, `ros2_ws/src/mesh_msgs` | `LeaderState`, `PeerState` |
+| Radio relay | `ros2_ws/src/radio_relay` | Custom scenario: copies the topics listed in the YAML between the two domains |
 
 ## Wireless emulation path
 
-Each robot has a network interface `radio0` inside its namespace. Frames take this path:
+Each robot has a network interface `radio0`. Frames take this path:
 
-```
-radio0 -> veth -> Linux bridge -> TAP -> ns-3 TapBridge -> ghost node -> shared 802.11a channel
+```text
+radio0 -> veth -> Linux bridge -> TAP -> ns-3 TapBridge -> ghost node -> shared 802.11 channel
 ```
 
-- **Real-time emulation.** ns-3 runs with its real-time simulator and TapBridge (`UseLocal` mode), so unmodified
-  software exchanges real packets. ns-3 version 3.48 is pinned.
-- **Ghost nodes carry no IP stack.** IP addresses live on the Linux side (`radio0`). The ghost node's
-  Wi-Fi device adopts the MAC address of `radio0`.
-- **Source-MAC guard.** An nftables bridge rule on each TAP drops frames whose source MAC is not that robot's `radio0`.
-  Without it the kernel's own bridge traffic (e.g. IGMP) is read first by TapBridge and the ghost device adopts the wrong
-  MAC, which causes unicast frames to be missed and retransmitted.
-- **IPv6 is disabled** on the emulated interface chain to keep neighbour-discovery traffic off the channel.
-- **Channel model.** Default: 802.11a, constant-rate OFDM 12 Mbit/s (control 6 Mbit/s), 16 dBm transmit power,
-  log-distance path loss (exponent 3.0), constant-speed propagation delay. Receiver parameters (noise figure, preamble
-  detection RSSI and SNR floors, CCA-ED threshold, sensitivity) and the error-rate model are explicit in the YAML.
-  They decide which mechanism limits the range; see [CONFIGURATION.md](CONFIGURATION.md).
-- **Local ns-3 patch.** `ns3/patches/0001-wifi-mac-sync-link-address-on-SetAddress.patch` fixes a crash in
-  ns-3 3.48 when TapBridge sets a Wi-Fi device's MAC address. See `ns3/patches/README.md`.
+| Property | Description |
+|---|---|
+| Real-time emulation | ns-3 runs its real-time simulator with TapBridge in `UseLocal` mode, so unmodified software exchanges real packets. |
+| Ghost nodes | A ghost node has no IP stack. IP addresses live on `radio0`, and the node's Wi-Fi device adopts the MAC address of `radio0`. |
+| Source-MAC guard | An nftables bridge rule on each TAP drops frames whose source MAC is not that robot's `radio0`. |
+| IPv6 | Disabled on the emulated interface chain, to keep neighbour-discovery traffic off the channel. |
+| Local ns-3 patch | Fixes a crash in ns-3 3.48 when TapBridge sets a Wi-Fi device's MAC address. See [../ns3/patches/README.md](../ns3/patches/README.md). |
+
+The source-MAC guard is required. Without it, TapBridge reads the kernel's own bridge traffic (for example IGMP) first,
+and the ghost device adopts the wrong MAC. Unicast frames are then missed and retransmitted.
+
+The default channel model is 802.11a at a constant OFDM rate of 12 Mbit/s (control frames 6 Mbit/s), 16 dBm transmit
+power, log-distance path loss with exponent 3.0 and constant-speed propagation delay. The receiver parameters and the
+error-rate model are explicit in the YAML and decide which mechanism limits the range. See
+[CONFIGURATION.md](CONFIGURATION.md) and [SIGNAL_MODEL.md](SIGNAL_MODEL.md).
 
 ## Position feed
 
-Gazebo publishes model poses; `pose_bridge.py` maps Gazebo models to agents, adds the per-agent antenna offset and sends
-a UDP/JSON datagram (sequence number, simulation time, wall time, positions) at a fixed rate (default 50 Hz), repeating the last pose
-when nothing changed. A listener thread in ns-3 parses each datagram and schedules the position update on the simulator
-thread. Only position is applied (constant-position mobility models). ns-3 objects are only touched on the simulator thread;
-the listener passes plain integers.
+`adapters/gazebo/pose_bridge.py` maps Gazebo models to agents, adds each agent's antenna offset and sends one UDP/JSON
+datagram at a fixed rate (default 50 Hz). The datagram holds a sequence number, simulation time, wall time and the
+positions. The bridge repeats the last pose when nothing changes.
 
-Before the first pose arrives, and in tests without a simulator, each ghost node sits at its configured start position
-(see [CONFIGURATION.md](CONFIGURATION.md)).
+A listener thread in ns-3 parses each datagram and schedules the position update on the simulator thread. Only the
+simulator thread touches ns-3 objects; the listener passes plain integers.
+
+Modelling choices:
+
+- Only position is applied. Each ghost node has a constant-position mobility model that is updated at the feed rate.
+- Before the first pose arrives, and in tests without a simulator, each node sits at its configured start position.
+  See [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Management network
 
-The simulator, pose bridge and ns-3 live in the root namespace on a bridge (`br-mgmt`, 10.20.0.0/24). Each robot has an `eth0`
-on an isolated bridge port: robots reach the simulator but not each other. PX4 reaches Gazebo over gz-transport on this
-network. This traffic is not emulated.
+The simulator, the pose bridge and ns-3 share a management network (`br-mgmt`, 10.20.0.0/24 by default). Each robot
+has an `eth0` on an isolated bridge port, so robots reach the simulator but not each other. PX4 reaches Gazebo over
+gz-transport on this network. This traffic is not emulated.
 
 ## Software inside each robot
 
-A robot runs, inside its namespace: a PX4 SITL instance (x500 quadrotor), a Micro XRCE-DDS agent, a flight node and a swarm node.
-Two DDS domains with disjoint reach separate local control from inter-robot traffic:
+A robot runs a PX4 SITL instance, a Micro XRCE-DDS agent, a flight node and a radio node. Two DDS domains with disjoint
+reach separate local control from inter-robot traffic:
 
-| Domain | Scope | Carries |
+| Domain | Reach | Carries |
 |---|---|---|
-| 0 | Localhost only (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) | PX4 topics (`/fmu/...`), the follower target |
+| 0 | Localhost only (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) | PX4 topics (`/fmu/...`) and the follower target |
 | 42 | Bound to `radio0` | The swarm message only |
 
-The swarm node is one process with two ROS 2 contexts, one per domain, connected by function calls. A default-deny
-nftables policy on `radio0` allows only the UDP ports of domain 42 (the XRCE agent otherwise advertises PX4 topics on every
-interface). Counters report any blocked attempts. The isolation checks confirm that no domain-0, XRCE or PX4-topic
-traffic appears on the emulated channel.
+The radio node is one process with two ROS 2 contexts, one per domain, connected by function calls. In the custom
+scenario the radio node is the relay (C++), which copies the topics listed in the YAML as serialized bytes, so users'
+nodes stay on the local domain. See [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md).
 
-PX4 instance *N* publishes under `/px4_N/fmu/...` (instance 0 has no prefix) and uses MAVLink system id *N*+1.
+A default-deny nftables policy on `radio0` allows only the UDP ports of domain 42. It exists because the XRCE agent
+otherwise advertises PX4 topics on every interface. Counters report blocked attempts. The isolation checks confirm that
+no domain-0, XRCE or PX4-topic traffic appears on the emulated channel.
+
+PX4 instance *N* publishes under `/px4_N/fmu/...` and uses MAVLink system id *N* + 1. Instance 0 has no prefix.
 
 ## Swarm protocol
 
-This section describes the leader-follower scenario (the default). A second scenario, `scenario.type: mesh_dropout`, runs an all-to-all heartbeat (`mesh_msgs/PeerState` on `/mesh/peer_state`, same domain 42 and firewall)
-while one agent flies out of radio range and back: see [MESH_DROPOUT.md](MESH_DROPOUT.md).
+This section describes the default scenario, leader-follower. The second scenario, mesh dropout, runs an all-to-all
+heartbeat (`mesh_msgs/PeerState` on `/mesh/peer_state`) on the same domain and firewall. See
+[MESH_DROPOUT.md](MESH_DROPOUT.md).
 
-The only inter-robot message is `swarm_msgs/LeaderState`: sender id, per-sender sequence number, send timestamp, position and
-velocity in a shared world frame (ENU, metres). By default it uses best-effort, volatile, keep-last-1 QoS, so loss is visible rather than hidden
-by retransmission; the profile is configurable (`swarm.qos.leader_state`, see CONFIGURATION.md). Sequence numbers and timestamps give loss and latency without extra instrumentation.
+The only inter-robot message is `swarm_msgs/LeaderState`: sender id, per-sender sequence number, send timestamp, and
+position and velocity in a shared world frame (ENU, metres). Sequence numbers and timestamps give loss and latency
+without extra instrumentation.
 
-- **Leader:** reads its PX4 state on the local domain, converts it to the world frame and publishes at a fixed rate.
-- **Follower:** computes `target = leader position + offset`, publishes it on the local domain (`/swarm/follower_target`) and
-  logs per-message latency and sequence gaps to a CSV. It reports link loss after a configurable silence.
-- **Follower flight node:** flies to the target at a fixed altitude. On link loss it holds the last target (`hold`) or lands (`land`).
+The default QoS is best-effort, volatile, keep-last 1, so loss stays visible instead of being hidden by
+retransmission. `swarm.qos.leader_state` changes it. See [CONFIGURATION.md](CONFIGURATION.md).
 
-PX4's local frame is NED with its origin at the vehicle's start; the conversion to world ENU uses the spawn pose and
-assumes the ground is at z = 0.
+| Role | Behaviour |
+|---|---|
+| Leader | Reads its PX4 state on the local domain, converts it to the world frame and publishes at a fixed rate. |
+| Follower | Computes `target = leader position + offset` and publishes it locally on `/swarm/follower_target`. |
+| Follower | Logs per-message latency and sequence gaps to a CSV, and reports link loss after a configurable silence. |
+| Follower flight node | Flies to the target at a fixed altitude. On link loss it holds the last target (`hold`) or lands (`land`). |
+
+PX4's local frame is NED with its origin at the vehicle's start. The conversion to the world ENU frame uses the spawn
+pose and assumes the ground is at z = 0.
 
 ## Run validity
 
-Because the emulation is real-time, a run is only meaningful if the simulators keep up. Each run reports:
-- **ns-3 lag** (wall clock minus simulated time) against `time.max_lag_ms`.
-- **Gazebo real-time factor** (simulated time advanced per wall-clock second; the emulated radio runs on the wall clock, so a simulator that falls behind
-  feeds ns-3 positions that are late relative to the traffic), as a sliding mean over `time.rtf_window_s` against `time.min_rtf`. Single-sample dips are reported but not fatal.
-  The measured window starts at the `go` signal (take-off) when a run has one (container runs, and native runs that wait for the GUI), otherwise 5 s after the first applied
-  pose, and ends with the poses. Stalls before take-off, such as a Gazebo GUI attaching, are printed as a `note` and are not part of the criterion. This window definition was
-  changed on 2026-10-21 after a GUI-attach stall (0.4 s at RTF 0.04, on the ground) failed the previous definition; the threshold (`min_rtf`) was not changed.
+The emulation is real-time, so a run is meaningful only if the simulators keep up. Each run reports two checks:
+
+| Check | Definition | Limit |
+|---|---|---|
+| ns-3 lag | Wall-clock time minus simulated time | At most `time.max_lag_ms` |
+| Real-time factor | Simulated time advanced per wall-clock second, as a sliding mean over `time.rtf_window_s` | At least `time.min_rtf` |
+
+The real-time factor matters because the emulated radio runs on the wall clock. A simulator that falls behind feeds
+ns-3 positions that are late relative to the traffic.
+
+The measured window for the real-time factor starts at the `go` signal (take-off) when a run has one, otherwise 5 s
+after the first applied pose. It ends with the last pose. Single-sample dips are reported and are not fatal. Stalls
+before take-off are printed as a `note` and are not part of the criterion.
+
+| Date | Criterion change | Reason |
+|---|---|---|
+| 2026-10-21 | The window starts at take-off instead of at the first pose. `time.min_rtf` is unchanged. | A Gazebo GUI attaching on the ground caused a 0.4 s stall at a factor of 0.04 and failed the earlier definition. |
 
 ## Limitations
 
-- The flight-control DDS path of each robot currently uses `radio0`'s address (delivered over loopback), so it fails if ns-3 stops and `radio0` loses carrier. Separating the vehicle and radio namespaces would remove the dependency.
-- The follower's link-loss behaviour is configurable (`hold` or `land`); no policy is recommended yet.
-- One leader per experiment; followers only receive.
-- Quadrotor (PX4 x500) in Gazebo only. A second simulator adapter requires a pose bridge and a vehicle driver.
-- The native deployment runs robots in plain network namespaces; the container deployment is described in [CONTAINERS.md](CONTAINERS.md) (headless, Gazebo only).
-- Ground is assumed at z = 0 in the swarm node's altitude conversion.
+- The flight-control DDS path of each robot uses the address of `radio0`, delivered over loopback. It fails if ns-3
+  stops and `radio0` loses carrier. Separate vehicle and radio namespaces would remove the dependency; this is not
+  implemented.
+- The follower's link-loss behaviour is configurable (`hold` or `land`). No policy is recommended.
+- The leader-follower scenario has one leader per experiment. Followers only receive.
+- Ghost nodes have no IP stack, so ns-3 forwards nothing between agents. Multi-hop routing is available only as
+  batman-adv running in the agents (Docker deployment; [CONTAINERS.md](CONTAINERS.md), "Mesh routing").
+- The validity check sets a lower bound on the real-time factor only. A simulator that runs faster than real time is
+  not detected.
+- The ground is assumed at z = 0 in the altitude conversion.
+- The native deployment supports Gazebo with the x500 multirotor. Ground vehicles and the experimental Isaac Sim driver
+  are available in the Docker deployment only. See [CONTAINERS.md](CONTAINERS.md).

@@ -18,7 +18,11 @@ if (cfg.get("scenario") or {}).get("type") == "mesh_dropout":         # frame th
     import mesh_plan
     pl = mesh_plan.plan(cfg)
     fliers = pl["agents"] if pl["mode"] == "roam" else pl["wanderers"]
-    pts = [(a["spawn_pose"][0], a["spawn_pose"][1]) for a in cfg["agents"]] + [tuple(p) for w in fliers.values() for p in w["waypoints_enu"]]
+    pts = [(a["spawn_pose"][0], a["spawn_pose"][1]) for a in cfg["agents"]] + [tuple(p) for w in fliers.values() for p in w.get("waypoints_enu", [])]
+    for w in fliers.values():                    # a fixed-wing agent has circles, not waypoints: frame its near circle (the far one is out of view by design; move the camera to follow it)
+        if w.get("kind") == "fixedwing":
+            (nx, ny), r = w["near_enu"], w["radius_m"]
+            pts += [(nx - r, ny - r), (nx + r, ny + r)]
     x0, x1, y0, y1 = min(p[0] for p in pts) - 8, max(p[0] for p in pts) + 8, min(p[1] for p in pts) - 8, max(p[1] for p in pts) + 8
 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
 ex, ey = x1 - x0, y1 - y0

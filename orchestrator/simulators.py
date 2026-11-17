@@ -10,6 +10,9 @@ described for each simulator type (`simulator.type` in the experiment YAML):
 Everything else (ns-3, the radio, ROS 2, the swarm protocol) is simulator-independent. Adding a simulator = one entry here
 plus a Dockerfile; see docs/CONTAINERS.md, "Adding a physics simulator (Isaac Sim)".
 """
+import os
+import subprocess
+
 import vehicles
 from containers import plan as container_plan
 
@@ -37,6 +40,7 @@ def _gazebo_px4_env(cfg, agent, world):
     p = container_plan(cfg)
     v = vehicles.for_simulator(agent, "gazebo")         # airframe and model of this agent's vehicle type (default x500)
     return {
+        **{f"PX4_PARAM_{k}": str(val) for k, val in v.get("px4_params", {}).items()},      # per-vehicle PX4 parameter overrides (orchestrator/vehicles.py)
         "PX4_GZ_STANDALONE": "1",                       # PX4 attaches to a running Gazebo instead of starting its own
         "PX4_SYS_AUTOSTART": v["autostart"],
         "PX4_SIM_MODEL": v["sim_model"],
@@ -56,6 +60,65 @@ def _gazebo_processes(cfg, world, config_path, log_dir):
     ]
 
 
+# ---- Isaac Sim (spike, experimental): Isaac Sim 5.1.0 + Pegasus Simulator v5.1.0 in one GPU container; each agent's PX4 connects to it over the
+# simulator MAVLink interface (TCP 4560 + px4_instance on the management network). Pegasus supports multirotors only. docs/CONTAINERS.md, "Isaac Sim".
+ISAAC_EULA_VAR = "COSIM_ACCEPT_ISAAC_EULA"
+ISAAC_GUI_VAR = "COSIM_ISAAC_GUI"                        # "1": Isaac Sim opens its window on the host's X11 display (demo only; rendering lowers the real-time factor)
+
+
+def _docker_runtimes():
+    """Names of the container runtimes of the Docker engine this host would use (`docker info`)."""
+    try:
+        r = subprocess.run(["docker", "info", "--format", "{{range $k, $v := .Runtimes}}{{$k}} {{end}}"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def _isaac_world(cfg, override=None):
+    return override or cfg["simulator"].get("world_name", "flat_plane")
+
+
+def _isaac_service(cfg, world):
+    if "nvidia" not in _docker_runtimes():
+        raise SystemExit("simulator.type isaac needs a GPU: the Docker engine has no 'nvidia' runtime. Install the NVIDIA Container Toolkit "
+                         "(https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), register it with "
+                         "`sudo nvidia-ctk runtime configure --runtime=docker`, restart Docker, and check `docker context ls` points at that engine.")
+    if os.environ.get(ISAAC_EULA_VAR) != "Y":
+        raise SystemExit(f"simulator.type isaac runs NVIDIA Isaac Sim, which needs you to accept the NVIDIA Omniverse licence agreement. "
+                         f"Read it, then set {ISAAC_EULA_VAR}=Y in the environment of this command. It is not set for you.")
+    env = {"ACCEPT_EULA": "Y", "PRIVACY_CONSENT": os.environ.get("COSIM_ISAAC_PRIVACY_CONSENT", "N"), "COSIM_WORLD": world}
+    volumes = []
+    if os.environ.get(ISAAC_GUI_VAR) == "1":
+        # Isaac Sim's own window on the host's X11 display (demo/run_container_demo.sh sets these). The X11 socket is a Unix socket, so the simulator's
+        # network stays internal. COSIM_ISAAC_XAUTH is an Xauthority file whose cookie has the wildcard family, because the container's hostname is not the host's.
+        display, xauth = os.environ.get("DISPLAY"), os.environ.get("COSIM_ISAAC_XAUTH")
+        if not display or not xauth or not os.path.isfile(xauth):
+            raise SystemExit(f"{ISAAC_GUI_VAR}=1 needs DISPLAY (an X11 session) and COSIM_ISAAC_XAUTH (an Xauthority file); demo/run_container_demo.sh prepares both.")
+        env.update({ISAAC_GUI_VAR: "1", "DISPLAY": display, "XAUTHORITY": "/tmp/cosim.xauth"})
+        volumes = ["/tmp/.X11-unix:/tmp/.X11-unix:ro", f"{os.path.abspath(xauth)}:/tmp/cosim.xauth:ro"]
+    return {
+        "environment": env,
+        "volumes": volumes,
+        "cap_add": [],
+        "gpu": True,
+        "healthcheck_cmd": "test -f /logs/.isaac_ready",
+        "healthcheck_retries": 150,                      # first start compiles shaders: about 160 s measured on an RTX 5060 Ti
+    }
+
+
+def _isaac_px4_env(cfg, agent, world):
+    v = vehicles.for_simulator(agent, "isaac")
+    return {
+        "PX4_SIM_MODEL": v["sim_model"],                 # resolves to airframe 10016_none_iris; no PX4_GZ_* variable, so the Gazebo bridge cannot start
+        "PX4_SIM_HOST_ADDR": container_plan(cfg)["mgmt"]["sim_ip"],        # PX4 connects out to TCP 4560 + px4_instance there
+    }
+
+
+def _isaac_processes(cfg, world, config_path, log_dir):
+    return [("isaac", ["/isaac-sim/python.sh", "/opt/cosim/adapters/isaac_sim/vehicle_sim.py", "--config", config_path])]
+
+
 SIMULATORS = {
     "gazebo": {
         "image": "cosim-sim-gazebo",
@@ -64,6 +127,14 @@ SIMULATORS = {
         "service": _gazebo_service,
         "px4_env": _gazebo_px4_env,
         "processes": _gazebo_processes,
+    },
+    "isaac": {
+        "image": "cosim-sim-isaac",
+        "dockerfile": "docker/sim-isaac.Dockerfile",
+        "world": _isaac_world,
+        "service": _isaac_service,
+        "px4_env": _isaac_px4_env,
+        "processes": _isaac_processes,
     },
 }
 

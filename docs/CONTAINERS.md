@@ -1,173 +1,345 @@
 # Docker deployment
 
-The whole stack can run under Docker Compose: **one container per agent, one for ns-3, one for the physics simulator.**
-It needs only the Docker daemon: no `sudo`, no host network namespaces, no ROS 2, PX4, Gazebo or ns-3 on the host.
+How to run the whole stack under Docker Compose, with one container per agent, one for ns-3 and one for the physics
+simulator. This document also describes how to add a physics simulator, a vehicle, a network technology or a world.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Operations](#operations)
+- [Live demo](#live-demo)
+- [Containers](#containers)
+- [Container networks](#container-networks)
+- [Physics simulators](#physics-simulators)
+- [Isaac Sim (experimental)](#isaac-sim-experimental)
+- [Vehicle types](#vehicle-types)
+- [Network technology](#network-technology)
+- [Mesh routing (batman-adv)](#mesh-routing-batman-adv)
+- [Scenarios](#scenarios)
+- [Worlds](#worlds)
+- [Troubleshooting](#troubleshooting)
+- [Results](#results)
+- [Limitations](#limitations)
+
+## Requirements
+
+The host needs only the Docker daemon with Compose. It needs no `sudo`, ROS 2, PX4, Gazebo or ns-3.
+
+Tested with Docker 29.7 and Compose 5.5 on Ubuntu 24.04. The native deployment in [SETUP.md](SETUP.md) reads the same
+experiment YAML and is unchanged.
+
+### batman-adv mesh routing
+
+Experiments with batman-adv mesh routing (see [Mesh routing](#mesh-routing-batman-adv)) need the `batman_adv` kernel
+module on the host. `cosim.py up` stops before starting such an experiment when the module is not loaded, and prints
+these commands.
+
+A container has no kernel of its own and cannot load kernel modules, so the Docker image cannot provide the module. It
+carries only the userspace tool `batctl`. Every machine that runs a mesh experiment needs these steps once.
+
+Check whether the module is loaded:
+
+```bash
+lsmod | grep batman_adv
 ```
-python3 orchestrator/cosim.py build                                             # once: build the images
-tests/containers_static_link.sh                                                 # network only (two agents)
-tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.yaml    # full flight, five agents
+
+If nothing is printed, install the package that contains the module. On Ubuntu it is part of `linux-modules-extra`,
+which minimal and cloud installations often omit:
+
+```bash
+sudo apt install linux-modules-extra-$(uname -r)
 ```
 
-Tested with Docker 29.7 and Compose 5.5 on Ubuntu 24.04. The native deployment (network namespaces on the host, see
-[SETUP.md](SETUP.md)) still works and is unchanged; both read the same experiment YAML.
+Load the module. It stays loaded until the next reboot:
 
-## Live demo: Gazebo GUI and live signal map
-
-```
-demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--halos] [--no-prompt]      # default config: five_agent_wifi.yaml
+```bash
+sudo modprobe batman_adv
 ```
 
-The simulation runs in the containers; two windows open on the host: the **Gazebo GUI**, attached to the simulator container, and a **live 2D map**
-(`tools/plot_comm_map.py --live`) that redraws about twice a second from what ns-3 is logging, with every agent pair coloured dark green (strong) to red (weak); pairs below the receiver floor have no line, and the figure shows each radio's transmit power and where the signal reaches the dropout floor. The signal of each pair is read from
-ns-3 itself (`ns3/pair_rssi.csv`: the scenario evaluates its own propagation loss chain for every ordered pair on the current node positions), so it follows any
-change of layout, agent count, transmit power or loss model in the YAML without touching the tool.
-The script starts the stack and holds the vehicles on the ground, opens the windows and frames an overview camera, and flies when you press Enter
-(`--no-prompt`: after 5 s). No sudo. It needs a desktop session, matplotlib with Tk (`python3-tk`), and Gazebo Harmonic and PX4's models on the host for the GUI
-(see [SETUP.md](SETUP.md)); `--no-gui` and `--no-map` drop either window.
-The GUI also shows a trail that grows behind each vehicle as it flies, in that agent's colour (`demo/path_markers.py --trace`, which follows `ns3/pose_applied.csv`, the poses ns-3 applied; one leg per metre moved). The same colour is used for the agent's node on the signal map (the map itself draws no trail) (`orchestrator/agent_colors.py`: the first categorical slots of the dataviz palette in YAML order: blue, orange, aqua, yellow, magenta, ...). `--show-plan` adds each agent's planned path (`mesh_dropout` configs), `--halos` a translucent yellow sphere on each vehicle, `--no-markers` omits all of it. These are Gazebo GUI markers: drawn on the host GUI only, not part of the simulated world, absent from physics and sensors. They stay in that GUI until it closes (the trail is cleared when the next run starts drawing).
+Optionally, load it at every boot:
 
-How the GUI reaches the container: the host's `gz` joins the `cosim` Gazebo partition from the Docker bridge's gateway address on `mgmt` (`10.20.0.254` by default,
-`mgmt.gateway` in `containers.py`). The agents' management firewall ignores it (only the simulator is allowed), and the GUI is not part of the experiment.
+```bash
+echo batman_adv | sudo tee /etc/modules-load.d/batman-adv.conf
+```
 
-Known effect: attaching the GUI makes the simulator pause briefly (about 0.4 s in the runs below) while it sends the scene. That happens on the ground before
-take-off. The real-time-factor check therefore measures from the `go` signal (take-off) to the end of the poses; the whole-run figure, including the pause, is
-printed as a `note` line but is not part of the criterion (see `docs/EXPERIMENTS.md`, "Run validity"). A pause or slowdown *during* the flight still fails the check.
+Tested with batman-adv 2024.0 from `linux-modules-extra-6.8.0-149-generic` on Ubuntu 24.04. A kernel update needs the
+`linux-modules-extra` package of the new kernel; repeat the install step if `modprobe` reports that the module is not
+found. Docker Desktop on macOS and Windows runs containers in its own virtual machine, whose kernel is not checked for
+batman-adv.
+
+## Quick start
+
+Build the images once. The first command compiles PX4; the second compiles ns-3:
+
+```bash
+docker build -t cosim-px4-runtime px4/
+python3 orchestrator/cosim.py build
+```
+
+Run the network-only test with two agents, then a flight with five agents:
+
+```bash
+tests/containers_static_link.sh
+tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi.yaml
+```
+
+## Operations
+
+| Command | Effect |
+|---|---|
+| `python3 orchestrator/cosim.py build [service...]` | Builds the images |
+| `python3 orchestrator/cosim.py up --config YAML --out DIR [--mode flight\|net]` | Starts a stack that logs to `DIR` |
+| `python3 orchestrator/cosim.py down --out DIR` | Removes the stack and returns ownership of `DIR` to the user |
+| `python3 orchestrator/cosim.py fetch-world NAME` | Downloads the Fuel models of a world ahead of time |
+| `docker compose -p cosim-<experiment name> down` | Removes a stack when the log directory is unknown |
+
+- The tests call `up` and `down` themselves and tear the stack down on exit and on interrupt.
+- After an interrupted run, call `down` with that run's log directory.
+- The agent and simulator images build on `cosim-px4-runtime` and share its layers. That base is about 12.5 GB because
+  it keeps the PX4 build tree. Override it with `docker compose build --build-arg PX4_RUNTIME_IMAGE=<image>`.
+- Rebuild the agent image after a change under `orchestrator/` or `ros2_ws/`.
+- `tests/containers_leader_follower.sh` honours `SIDE`, `ALT`, `SPEED`, `OFFSET`, `PX4_WORLD` and `OUT`, like the native
+  test.
+
+## Live demo
+
+Run a flight with the Gazebo GUI and a live signal map on the host. The default configuration is
+`five_agent_wifi.yaml`:
+
+```bash
+demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--show-plan] [--halos] [--no-prompt]
+```
+
+The simulation runs in the containers. The script starts the stack, holds the vehicles on the ground, opens two
+windows, frames an overview camera, and starts the flight when Enter is pressed.
+
+| Window | Content |
+|---|---|
+| Gazebo GUI | The host's `gz` attached to the simulator container |
+| Live 2D map | `tools/plot_comm_map.py --live`: every agent pair coloured from dark green (strong) to red (weak) |
+
+| Flag | Effect |
+|---|---|
+| `--no-gui`, `--no-map` | Omits that window |
+| `--no-prompt` | Starts the flight after 5 s without waiting for Enter |
+| `--show-plan` | Draws each agent's planned path (`mesh_dropout` configurations) |
+| `--halos` | Draws a translucent sphere on each vehicle |
+| `--no-markers` | Omits trails, plans and halos |
+
+Requirements on the host: a desktop session, `matplotlib` with Tk (`python3-tk`), Gazebo Harmonic and PX4's Gazebo
+models. See [SETUP.md](SETUP.md).
+
+Details:
+
+- The map redraws about twice a second from `ns3/pair_rssi.csv`, which ns-3 computes from its own loss chain. It
+  follows any change of layout, agent count, transmit power or loss model in the YAML. Pairs below the receiver floor
+  have no line. See [SIGNAL_MODEL.md](SIGNAL_MODEL.md).
+- The GUI draws a trail behind each vehicle in that agent's colour (`demo/path_markers.py --trace`, from the poses ns-3
+  applied). `orchestrator/agent_colors.py` assigns the colours in YAML order. The map uses the same colour for the
+  agent's node.
+- Trails, plans and halos are Gazebo GUI markers. They exist only in the host GUI and are absent from physics and
+  sensors.
+- The host's `gz` joins the `cosim` Gazebo partition from the Docker bridge's gateway address on `mgmt` (`10.20.0.254`
+  by default). The agents' management firewall ignores that address.
+- Attaching the GUI pauses the simulator briefly on the ground (about 0.4 s in the runs in [Results](#results)). The
+  real-time-factor check measures from take-off, so the pause is reported as a `note` and is not part of the criterion.
+  A pause during the flight still fails the check.
 
 ## Containers
 
 | Container | Image | Runs | Count |
 |---|---|---|---|
-| `simulator` | `cosim-sim-gazebo` | Gazebo Harmonic server (headless) and the pose adapter that feeds ground-truth positions to ns-3 | 1 |
-| `ns3` | `cosim-ns3` | The ns-3 scenario for the chosen network technology, a bridge and a TAP per agent | 1 |
-| `agent1` ... `agentN` | `cosim-agent` | PX4 SITL, Micro XRCE-DDS Agent, the swarm node and the flight node | one per `agents:` entry |
+| `simulator` | `cosim-sim-gazebo` | Gazebo Harmonic server (headless) and the pose adapter | 1 |
+| `ns3` | `cosim-ns3` | The ns-3 scenario of the chosen network technology, and a bridge and a TAP per agent | 1 |
+| `agent1` ... `agentN` | `cosim-agent` | PX4 SITL, Micro XRCE-DDS Agent, the radio node and the flight node | One per `agents` entry |
 
-`orchestrator/compose_gen.py` writes the Compose project from the experiment YAML (`<log dir>/compose/docker-compose.yml`), so
-adding an agent to the YAML adds a container. The generated file is plain Compose and can be used directly:
-`docker compose -f <log dir>/compose/docker-compose.yml ps`. Do not edit it; change the YAML and regenerate.
+`orchestrator/compose_gen.py` writes the Compose project from the experiment YAML to
+`<log dir>/compose/docker-compose.yml`. Adding an agent to the YAML adds a container. The generated file is plain
+Compose. Do not edit it; change the YAML and regenerate.
 
-## How the containers communicate
+The simulator has its own container because it is the part that changes. Gazebo and Isaac Sim need different base
+images and GPU runtimes, and the rest of the system touches the simulator through two interfaces only: the PX4 link
+and the pose feed. One world holds every vehicle, so there is one simulator container. The pose adapter runs inside
+it, because it subscribes to the simulator's own API.
 
-There are exactly three kinds of connection. Anything not listed here does not exist.
+## Container networks
 
-```
-   ┌─────────────┐   pose feed (UDP/JSON)    ┌────────────┐
-   │  simulator  ├──────────────────────────►│    ns3     │      mgmt network (not emulated):
-   │ Gazebo+pose │        mgmt               │   ns-3 +   │      simulator, ns3 and every agent
-   │   adapter   │                           │ bridge/TAP │
-   └──────▲──────┘                           │ per agent  │
-          │ gz-transport (mgmt)              └──┬──────┬──┘
-          │                         link-agent1 │      │ link-agent2     private networks, one per agent:
-   ┌──────┴──────┐ ┌─────────────┐              │      │                 radio frames only, emulated by ns-3
-   │   agent1    ├─┤  (radio0)   ├──────────────┘      │
-   │ PX4, ROS 2  │ └─────────────┘                     │
-   └─────────────┘                                     │
-   ┌─────────────┐ ┌─────────────┐                     │
-   │   agent2    ├─┤  (radio0)   ├─────────────────────┘     ... and so on for every agent
-   │ PX4, ROS 2  │ └─────────────┘
-   └─────────────┘
-   Every agent also reaches the simulator over gz-transport on mgmt. No agent has any path to another agent except through ns3.
+Three kinds of connection exist. No other path exists between containers.
+
+```text
+   +-------------+   pose feed (UDP/JSON)    +------------+
+   |  simulator  +-------------------------->|    ns3     |      mgmt network (not emulated):
+   | Gazebo+pose |        mgmt               |   ns-3 +   |      simulator, ns3 and every agent
+   |   adapter   |                           | bridge/TAP |
+   +------^------+                           | per agent  |
+          | gz-transport (mgmt)              +--+------+--+
+          |                         link-agent1 |      | link-agent2     private networks, one per agent:
+   +------+------+                              |      |                 radio frames only, emulated by ns-3
+   |   agent1    +---- radio0 ------------------+      |
+   | PX4, ROS 2  |                                     |
+   +-------------+                                     |
+   +-------------+                                     |
+   |   agent2    +---- radio0 -------------------------+
+   | PX4, ROS 2  |
+   +-------------+
 ```
 
 | Connection | Network | Carries | Emulated |
 |---|---|---|---|
-| agent ↔ ns3 | `link-<agent>`, one private network per agent (only that agent and ns3 are on it) | Ethernet frames of the agent's `radio0` | **Yes**: the frames enter ns-3 through a TAP and leave through the ghost node's 802.11 device |
-| agent ↔ simulator | `mgmt` | gz-transport (PX4 to Gazebo: sensors, motor commands, model spawn) | No |
-| simulator → ns3 | `mgmt` | Pose feed: UDP/JSON datagrams to `ns3:5600` | No |
+| agent to ns3 | `link-<agent>`, one private network per agent | Ethernet frames of the agent's `radio0` | Yes |
+| agent to simulator | `mgmt` | gz-transport: sensors, motor commands, model spawn | No |
+| simulator to ns3 | `mgmt` | Pose feed: UDP/JSON datagrams to port 5600 | No |
 
-- **Agent to agent.** An agent has no network path to another agent except through ns-3. Each agent sits on its own
-  `link-<agent>` network, so a frame from agent 1 can only reach the `ns3` container, where it is bridged to a TAP and handed to ns-3.
-  The same Ethernet frames come out of ns-3 on the receiving agent's link network, with the MAC address preserved.
-  Every agent is also on `mgmt`, but an nftables policy inside each agent (`cosim_mgmt`) drops all management traffic to and from anything but
-  the simulator. Its counters show the attempts it blocked; the tests check them.
-- **Inside the `ns3` container** each link interface is joined to a Linux bridge together with a TAP device (`tap-<agent>`), which the ns-3
-  TapBridge opens, exactly as `wire.py` does on the host. The source-MAC guard (an nftables rule that lets only that agent's `radio0` MAC
-  reach its TAP) is installed here too; the MAC of every `radio0` is derived from the agent's position in the YAML so that both sides agree.
-- **`radio0` is renamed inside the agent.** Docker numbers interfaces in no guaranteed order, so `container_net.py` finds the radio interface
-  by its address, then renames it to `radio0`, sets the planned MAC and the YAML's `radio_ip`, and installs the radio firewall
-  (domain-42 swarm ports only). The swarm DDS domain, the PX4 domain and every other process see the same `radio0` as in the native setup.
-- **Addressing.** All of it comes from the YAML through `orchestrator/containers.py`: `network.mgmt.subnet`, each agent's `mgmt_ip` and
-  `radio_ip`, and the optional `containers:` section ([CONFIGURATION.md](CONFIGURATION.md)). The simulator takes `network.mgmt.bridge_ip`.
-  Link networks come from a block (default `10.30.0.0/16`, one /24 per agent). Change it if it collides with an existing Docker network.
-- **Logs and synchronisation.** The run's log directory is mounted at `/logs` in every container; file names are those of the native scripts, so
-  `tools/analyze_formation.py` reads a container run unchanged. The agents wait for a file `/logs/go` before flying; the test driver creates it
-  once every agent reports PX4 ready (Compose healthchecks) and the simulator, ns-3 and the agents are up.
+| Topic | Description |
+|---|---|
+| Agent to agent | An agent reaches another agent only through ns-3. A frame on `link-<agent>` reaches only the `ns3` container, where a bridge hands it to a TAP. |
+| Management isolation | Every agent is on `mgmt`, but the nftables table `cosim_mgmt` in each agent drops all management traffic except to and from the simulator. The tests check its counters. |
+| Inside `ns3` | Each link interface joins a Linux bridge with a TAP device `tap-<agent>`, which the ns-3 TapBridge opens. The source-MAC guard is installed here. |
+| MAC addresses | The MAC of each `radio0` derives from the agent's position in the YAML, so both sides agree. ns-3 preserves it end to end. |
+| `radio0` | Docker numbers interfaces in no guaranteed order. `orchestrator/container_net.py` finds the radio interface by its address, renames it to `radio0`, sets the MAC and `radio_ip`, and installs the radio firewall. |
+| Addressing | `orchestrator/containers.py` derives all addresses from the YAML. Link networks come from `containers.link_subnet_base` (default `10.30.0.0/16`, one /24 per agent). |
+| Logs | The run's log directory is mounted at `/logs` in every container. File names match the native scripts, so the analysis tools read a container run unchanged. |
+| Start signal | The agents wait for the file `/logs/go`. The test driver creates it once the simulator, ns-3 and every agent are healthy and every PX4 is ready. |
 
-## Should the physics simulator be in its own container?
+## Physics simulators
 
-Yes, and it is. The reasons are specific to this project:
-
-1. **It is the part that changes.** Everything else (ns-3, ROS 2, PX4, the swarm protocol) is simulator-independent. Gazebo and Isaac Sim need different
-   base images, Python versions and GPU runtimes; putting the simulator behind a container boundary keeps those out of the agents and out of ns-3.
-2. **Its requirements differ.** Isaac Sim needs the NVIDIA container runtime and a specific CUDA/driver stack; the agents need none of it.
-   A separate container means only that one service asks for `gpus:`.
-3. **The interface is already narrow.** The rest of the system touches the simulator through two things only: how PX4 talks to it, and the pose feed to ns-3.
-   Both already cross the `mgmt` network, so moving the simulator into a container changed no protocol.
-4. **It is shared, not per agent.** One world holds every agent's vehicle, so it is one container, not one per agent.
-
-What is *not* separated: the pose adapter runs inside the simulator container, because it must subscribe to the simulator's own API. The
-simulator container is therefore "physics engine + its pose adapter", and its contract with the rest of the system is below.
-
-## Adding a physics simulator (Isaac Sim)
-
-Only Gazebo has a container driver today. A new simulator needs these four pieces; nothing in ns-3, the agents' ROS 2 code or the swarm protocol changes.
+Gazebo has the supported container driver. Isaac Sim has an experimental one. A new simulator needs four pieces.
+ns-3, the agents' ROS 2 code and the swarm protocol do not change.
 
 | Piece | What to provide |
 |---|---|
-| **Image** | `docker/sim-<name>.Dockerfile`, with whatever the simulator needs (for Isaac Sim the NVIDIA base image) |
-| **Registry entry** | One entry in `SIMULATORS` in `orchestrator/simulators.py`, keyed by `simulator.type` in the YAML |
-| **Pose adapter** | A process in the simulator container that sends the pose feed (below) |
-| **Vehicle link** | The environment PX4 needs to attach to this simulator, returned by the entry's `px4_env()` |
+| Image | `docker/sim-<name>.Dockerfile` |
+| Registry entry | One entry in `SIMULATORS` in `orchestrator/simulators.py`, keyed by `simulator.type` |
+| Pose adapter | A process in the simulator container that sends the pose feed |
+| Vehicle link | The environment PX4 needs to attach to the simulator, returned by the entry's `px4_env()` |
 
-The registry entry has four functions: `world()` (which world or stage to load), `service()` (extra Compose settings, such as `gpus`, the
-health check, environment), `px4_env()` (how each agent's PX4 attaches) and `processes()` (what the simulator container runs).
+The registry entry has four functions:
 
-**The pose feed contract** (the whole interface to ns-3). One UDP datagram to `network.pose.listen_addr:port` (the `ns3` container) at
-`network.pose.rate_hz`, repeating the last pose when nothing changed:
+| Function | Returns |
+|---|---|
+| `world()` | The world or stage to load |
+| `service()` | Extra Compose settings, such as `gpus`, the health check and the environment |
+| `px4_env()` | How each agent's PX4 attaches |
+| `processes()` | What the simulator container runs |
+
+### Pose feed contract
+
+The pose feed is the whole interface to ns-3. The adapter sends one UDP datagram to `network.pose.listen_addr:port` at
+`network.pose.rate_hz` and repeats the last pose when nothing changes:
 
 ```json
 {"seq": 123, "t_sim": 45.678, "t_wall": 1790000000.123, "agents": {"agent1": [x, y, z], "agent2": [x, y, z]}}
 ```
 
-Positions are the antenna position in metres in the simulator's world frame, taken as East-North-Up with the same origin ns-3 uses (the pose
-bridge adds `antenna_offset`). `t_sim` is simulation time, `t_wall` the sender's wall clock (ns-3 reports staleness from it). `adapters/gazebo/pose_bridge.py`
-is the reference; the encoding is isolated in its `encode()`.
+| Field | Meaning |
+|---|---|
+| `seq` | Sequence number, rising by 1 |
+| `t_sim` | Simulation time in seconds |
+| `t_wall` | The sender's wall clock in seconds; ns-3 reports staleness from it |
+| `agents` | Antenna position of each agent in metres, East-North-Up, in the origin ns-3 uses |
 
-**The vehicle link** is simulator-specific and is the part that needs thought. Gazebo's gz-transport reaches PX4 directly over `mgmt`
-(`PX4_GZ_STANDALONE`). Isaac Sim does not use gz-transport. A likely route (not verified here) is PX4's MAVLink simulator interface (lockstep over TCP, one port
-per instance) as used by Isaac Sim extensions such as Pegasus Simulator, which would need a different PX4 start-up (a non-Gazebo `PX4_SIM_MODEL`
-and the simulator's TCP port) in `px4_env()`. The agent containers, the swarm node and ns-3 are unaffected. This has not been implemented or tested.
+`adapters/gazebo/pose_bridge.py` is the reference implementation. Its `encode()` isolates the encoding, and it adds
+`antenna_offset`.
 
-Steps: add the Dockerfile, add the registry entry (and the `px4_env()` that attaches PX4), write the adapter so it satisfies the pose contract, set
-`simulator.type: isaac` in a copy of an experiment YAML, then run `python3 orchestrator/cosim.py build` and a test.
-Two limitations to plan for: the `agents[].px4_gz_model` field names a Gazebo model, so another simulator needs its own mapping from scene object to agent name
-(the adapter can do this itself and only emit agent names); and Gazebo-specific names in `simulators.py` (`px4_flat`, `x500`) are the Gazebo driver's
-business only.
+### Vehicle link
+
+The vehicle link is simulator-specific. Gazebo's gz-transport reaches PX4 directly over `mgmt` (`PX4_GZ_STANDALONE`).
+The Isaac Sim driver uses PX4's MAVLink simulator interface as implemented by Pegasus Simulator: TCP, one port per
+instance, 4560 + `px4_instance`.
+
+### Steps
+
+1. Add the Dockerfile.
+2. Add the registry entry, including the `px4_env()` that attaches PX4.
+3. Write the adapter so that it satisfies the pose feed contract.
+4. Set `simulator.type` in a copy of an experiment YAML.
+5. Run `python3 orchestrator/cosim.py build` and a test.
+
+`agents[].px4_gz_model` names a Gazebo model. Another simulator needs its own mapping from scene object to agent name;
+the adapter can hold it and emit only agent names.
+
+## Isaac Sim (experimental)
+
+`simulator.type: isaac` runs Isaac Sim 5.1.0 headless with Pegasus Simulator v5.1.0 (commit
+`644da37e9d5268e5f9a34e78bdcfd57a8bab82b4`) in the simulator container. The pinned PX4 in each agent container
+connects over the MAVLink simulator interface. The driver is a spike that establishes what Isaac Sim needs. It is not
+a supported simulator.
+
+| Implemented | Location |
+|---|---|
+| Driver and image | `orchestrator/simulators.py`, `docker/sim-isaac.Dockerfile` |
+| Scene script, one vehicle type (`iris`) | `adapters/isaac_sim/vehicle_sim.py` |
+| Pose feed, a thread inside the Isaac process | `adapters/isaac_sim/pose_feed.py` |
+| Real-time factor from the pose feed | `tools/analyze_isaac.py`, `tools/timehealth.py` |
+| Camera stream over the management network | `adapters/isaac_sim/camera_stream.py`, `orchestrator/camera_sink.py` |
+
+Isaac runs are judged by `tools/analyze_isaac.py`, not `tools/analyze_formation.py`. The camera frames are raw, not a
+ROS 2 topic. `COSIM_ISAAC_GUI=1`, set by `demo/run_container_demo.sh`, opens Isaac Sim's window for demonstrations. The
+tests are listed as Isaac Sim stages A to F in [EXPERIMENTS.md](EXPERIMENTS.md).
+
+### Requirements
+
+Measured on the development machine: Ubuntu 24.04, RTX 5060 Ti, driver 580.178.04.
+
+| Requirement | Detail |
+|---|---|
+| NVIDIA GPU and the NVIDIA Container Toolkit | `docker info` must list an `nvidia` runtime. The generator stops with a message when it is missing. |
+| Base image `nvcr.io/nvidia/isaac-sim:5.1.0` | 22.9 GB unpacked. It needs an NVIDIA NGC account and `docker login nvcr.io`. |
+| Licence acceptance | Set `COSIM_ACCEPT_ISAAC_EULA=Y` yourself for `cosim.py build`, `up` and the tests. Nothing sets it for you. |
+| Privacy setting | `COSIM_ISAAC_PRIVACY_CONSENT` (default `N`) is passed to Isaac Sim as `PRIVACY_CONSENT`. |
+
+With Docker Desktop installed, `docker context ls` may point at its separate engine instead of the host engine.
+
+### Implementation facts
+
+- PX4 attaches with `PX4_SIM_MODEL=none_iris` and `PX4_SIM_HOST_ADDR=<simulator IP>`. It connects out to TCP 4560 +
+  `px4_instance`.
+- Pegasus listens with `connection_ip` set to `0.0.0.0`. Its default, `localhost`, is unreachable from another
+  container.
+- The simulator container has no internet. Pegasus' `params.py` and Isaac's default ground plane both query NVIDIA's
+  asset server at start-up and fail offline. The scene script answers the first lookup with an empty path and uses a
+  fixed collision box as ground.
+- Pegasus runs from `PYTHONPATH`. It is not installed with `pip install -e`, because its setup script edits Isaac Sim's
+  kit application files.
+- Some materials are hosted on NVIDIA's asset server and fail to compile offline. The scene script adds a light and four
+  coloured posts when an agent has a camera.
+- The first start compiles shaders, about 160 s to the ready state in one run. Nothing is cached between runs.
 
 ## Vehicle types
 
-`agents[].vehicle` (default `x500`) picks what each agent is. `orchestrator/vehicles.py` holds the registry. A vehicle type is defined **per physics simulator**,
-because two things change independently: the PX4 airframe and model name the agent container starts (`PX4_SYS_AUTOSTART`, `PX4_SIM_MODEL`), and the asset the simulator
-spawns. For Gazebo both come from PX4's own tree: `x500` is airframe `4001_gz_x500`, `r1_rover` is `4009_gz_r1_rover` (the Aion R1, differential drive), spawned as
-`<model>_<px4_instance>`. `kind` (`multirotor`, `rover`) is what control code switches on and does not depend on the simulator. The ns-3 side, the radio and the
-swarm DDS domain do not depend on the vehicle.
+`agents[].vehicle` selects what each agent is. `orchestrator/vehicles.py` holds the registry. A vehicle type is defined
+per physics simulator, because the PX4 airframe and the simulator asset change independently.
 
-Adding a vehicle = one entry in `VEHICLES` per simulator that can run it, plus control code for its `kind`. The multirotor scenarios (`leader_follower`, `mesh_dropout`) fly 3-D position
-setpoints and are not valid for rovers; `rover_drive` needs rovers. `mesh_dropout` (roam mode) accepts a mixed fleet: a drone runs `mesh_flight`, a rover `mesh_drive` ([MESH_DROPOUT.md](MESH_DROPOUT.md)). Not done yet: a rover leader-follower scenario, terrain-aware spawn heights
-or ground-level obstacle checks (Baylands), and any vehicle for another simulator.
+| Vehicle | Kind | Simulator | PX4 airframe |
+|---|---|---|---|
+| `x500` (default) | `multirotor` | Gazebo | `4001_gz_x500` |
+| `r1_rover` | `rover` | Gazebo | `4009_gz_r1_rover` (Aion R1, differential drive) |
+| `iris` | `multirotor` | Isaac Sim (experimental) | `none_iris` |
+| `rc_cessna` (work in progress) | `fixedwing` | Gazebo | `4003_gz_rc_cessna` |
 
-For Isaac Sim, the vehicle registry is where its differences land: it has no `gz_*` airframes, so each vehicle would need an Isaac entry (a PX4 airframe that suits the interface
-used, plus a USD asset reference) next to its Gazebo one; `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator. Not implemented.
+- Gazebo spawns a vehicle as `<model>_<px4_instance>`.
+- Control code switches on `kind`, which does not depend on the simulator.
+- The ns-3 side, the radio and the swarm DDS domain do not depend on the vehicle.
+- `vehicles.check()` stops with a message for a vehicle that has no entry for the chosen simulator.
 
-## Changing the networking technology
+To add a vehicle, add one entry to `VEHICLES` per simulator that can run it, and control code for its `kind`.
 
-"Network technology" is chosen at two levels, both from the experiment YAML. Neither requires editing the orchestrator.
+| Scenario | Vehicles accepted |
+|---|---|
+| `leader_follower` | Multirotors only: it flies 3-D position setpoints |
+| `mesh_dropout`, mode `roam` | Mixed: a multirotor runs `mesh_flight`, a rover runs `mesh_drive` |
+| `rover_drive` | Rovers only |
+| `custom` | Any vehicle the user's controller drives; tested with multirotors only |
 
-### 1. Change the Wi-Fi standard, rates or receiver model (YAML only)
+## Network technology
 
-`network.wifi` selects the 802.11 flavour. Supported values of `standard`: `80211a` (default), `80211g`, `80211n`, `80211ac`, `80211ax`.
-`band` (`5GHZ` or `2_4GHZ`; default `5GHZ`, `2_4GHZ` for `80211g`) selects the band. `data_mode` and `control_mode` are passed to ns-3 unchanged, so they must
-belong to the standard:
+The experiment YAML selects the network technology at two levels. Neither requires editing the orchestrator.
+
+### Wi-Fi standard, rates and receiver model
+
+`network.wifi.standard` selects the 802.11 standard and `band` selects the band. `data_mode` and `control_mode` pass to
+ns-3 unchanged, so they must belong to the standard:
 
 | `standard` | `data_mode` example | `control_mode` example |
 |---|---|---|
@@ -177,114 +349,216 @@ belong to the standard:
 | `80211ac` | `VhtMcs4` | `OfdmRate6Mbps` |
 | `80211ax` | `HeMcs4` | `OfdmRate6Mbps` |
 
-Also revisit `network.channel.loss`: the 1 m reference loss depends on the frequency (about 46.7 dB at 5.2 GHz, 40.0 dB at 2.4 GHz). Examples:
-`config/experiments/two_agent_wifi_80211g.yaml` and `two_agent_wifi_80211n.yaml` differ from `two_agent_wifi.yaml` only in those lines. Run it:
+Revisit `network.channel.loss` when the band changes. The 1 m reference loss depends on the frequency: about 46.7 dB at
+5.2 GHz and 40.0 dB at 2.4 GHz.
 
-```
+Run the 802.11n example. The test checks that ns-3 reports the standard and rate the YAML asks for:
+
+```bash
 tests/containers_static_link.sh --config config/experiments/two_agent_wifi_80211n.yaml
 ```
 
-The test checks that ns-3 reports the standard and rate the YAML asked for. The 802.11g and 802.11n examples were run this way (and 802.11a).
-`ac` and `ax` are accepted by the scenario but have not been run. `tools/link_budget.py` predicts range for 802.11a only.
+### Another technology
 
-### 2. Add another technology (new ns-3 scenario)
+A technology is an ns-3 scenario program plus one registry line. `network.technology` names it; the default is `wifi`.
 
-A technology is an ns-3 scenario program plus one registry line. `network.technology` in the YAML names it (default `wifi`).
+1. Write the scenario under `ns3/scenarios/<name>/`, using `wifi_adhoc_tap` as the template. It must meet the
+   requirements in the table below.
+2. Build it into the image. Add the target to the `ns3 build` line in `docker/ns3.Dockerfile` and link its binary under
+   `/opt/cosim/scenarios/<name>`. For native runs, add it to `ns3/build_ns3.sh`. Add any further ns-3 modules, for
+   example `lte`, to `--enable-modules`.
+3. Register it in `orchestrator/technologies.py`:
 
-1. **Write the scenario** under `ns3/scenarios/<name>/` (copy `wifi_adhoc_tap` as the template). To plug into the rest of the system it must:
-   - take `--config=<yaml> --log-dir=<dir> --duration=<s>` and read its parameters from `network.<section>` of the YAML;
-   - create one ghost node per entry of `agents:` (in YAML order) and attach one `TapBridge` per node, in `UseLocal` mode, to the TAP named
-     by that agent's `tap:`; give the nodes **no** IP stack, since addresses live on the Linux side;
-   - use ns-3's real-time simulator (`RealtimeSimulatorImpl`) and enable checksums;
-   - apply positions from the pose feed (UDP/JSON to `network.pose`; the listener in `wifi_adhoc_tap.cc` can be reused as is);
-   - write `pair_rssi.csv` (`t_s,tx,rx,distance_m,rssi_dbm,below_floor`: the power a frame from `tx` would reach `rx` with, from the technology's own loss model, per
-     `network.link_log_interval_s`) if you want the signal map to work; without it the tool falls back to a LogDistance estimate from the YAML and says so on the figure;
-   - write `summary.json` (`ns3_max_lag_ms`, `valid_ns3_lag`) and `lag.csv` (`t_s,lag_ms`, one row per simulated second) into `--log-dir`, and stop cleanly on SIGTERM.
-     The `ns3` container is healthy once `lag.csv` has a data row.
-2. **Build it into the image.** Scenarios under `ns3/scenarios/*/` are copied into the image and built; add the new target to the `ns3 build` line
-   in `docker/ns3.Dockerfile` and symlink its binary under `/opt/cosim/scenarios/<name>` as that file does for `wifi_adhoc_tap`. For native runs add it to
-   `ns3/build_ns3.sh`. If the technology needs ns-3 modules not yet enabled (for example `lte`), add them to `--enable-modules` in the Dockerfile.
-3. **Register it** in `orchestrator/technologies.py`:
    ```python
    "lorawan": {"scenario": "lorawan_tap", "config_section": "lorawan", "summary": "..."},
    ```
-4. **Select it** in a copy of an experiment YAML:
+
+4. Select it in a copy of an experiment YAML:
+
    ```yaml
    network:
      technology: lorawan
      lorawan: {...}          # whatever the scenario reads
    ```
-   `network.wifi` is only required when the technology is `wifi`. The agents' own `radio_ip`, TAP and bridge names, the isolation and the swarm protocol are unchanged.
 
-Notes: the radio firewall allows only the swarm DDS UDP ports, which stays correct for any technology that carries Ethernet frames. A technology
-that cannot carry multicast or large frames will change how the swarm DDS domain behaves; the tests report that. `ns3/patches/0001-...` is specific to
-Wi-Fi devices.
+| Requirement on the scenario | Detail |
+|---|---|
+| Arguments | Accept `--config=<yaml> --log-dir=<dir> --duration=<s>` and read parameters from `network.<section>` |
+| Nodes | Create one ghost node per `agents` entry, in YAML order, with no IP stack |
+| TapBridge | Attach one TapBridge per node, in `UseLocal` mode, to the TAP named by that agent's `tap` |
+| Simulator | Use `RealtimeSimulatorImpl` and enable checksums |
+| Positions | Apply positions from the pose feed; the listener in `wifi_adhoc_tap.cc` is reusable |
+| Signal log | Write `pair_rssi.csv` (`t_s,tx,rx,distance_m,rssi_dbm,below_floor`) for the signal map |
+| Health | Write `summary.json` (`ns3_max_lag_ms`, `valid_ns3_lag`) and `lag.csv` (`t_s,lag_ms`), and stop cleanly on SIGTERM |
+
+Notes:
+
+- The `ns3` container is healthy once `lag.csv` has a data row.
+- Without `pair_rssi.csv`, the map falls back to a log-distance estimate from the YAML and says so on the figure.
+- `network.wifi` is required only when the technology is `wifi`.
+- The radio firewall allows only the swarm DDS UDP ports. That stays correct for any technology that carries Ethernet
+  frames.
+- A technology that cannot carry multicast or large frames changes how the swarm DDS domain behaves.
+- `ns3/patches/0001-wifi-mac-sync-link-address-on-SetAddress.patch` is specific to Wi-Fi devices.
+
+## Mesh routing (batman-adv)
+
+`network.mesh.routing: batman_adv` runs the Linux batman-adv kernel module in every agent, over the emulated ad hoc
+channel. Agents that are out of range of each other then reach each other through agents in between. The routing is the
+real batman-adv code, not a model; ns-3 is unchanged and only decides which frames reach which agent.
+
+```yaml
+network:
+  mesh:
+    routing: batman_adv
+    orig_interval_ms: 1000      # originator message interval; batman-adv's default
+```
+
+Interfaces in each agent:
+
+| Interface | Without mesh routing | With batman-adv |
+|---|---|---|
+| `radio0` | The interface to ns-3, with the agent's radio IP | The batman-adv interface, with the agent's radio IP; MTU 1468 |
+| `mesh0` | Not present | The interface to ns-3; carries batman-adv frames only (ethertype 0x4305) |
+
+Everything that uses `radio0` (DDS configuration, radio firewall, tests) therefore works unchanged. An extra firewall
+table, `cosim_mesh`, drops and counts any IP packet on `mesh0`.
+
+| Item | Value |
+|---|---|
+| batman-adv | Kernel module 2024.0 (host), routing algorithm B.A.T.M.A.N. IV (its default), compat version 15 |
+| Originator address | The `mesh0` MAC of each agent, `02:c0:5d:00:00:NN` (`orchestrator/containers.py`) |
+| `radio0` MAC | `02:c0:5e:00:00:NN`, distinct from the originator address |
+| MTU | `radio0` 1468: batman-adv adds up to 32 bytes, and the emulated chain carries 1500. Larger IP packets are fragmented by IP |
+| Route log | `<log dir>/mesh_routes/<agent>.csv`: each agent's next hop toward every other agent, once per second (`orchestrator/batman_routes.py`) |
+| Tools in the agent image | `batctl`, for example `batctl meshif radio0 originators` or `batctl meshif radio0 tr <MAC>` |
+
+Run the static check (network only) and the transition flight:
+
+```bash
+tests/containers_batman_static.sh
+tests/containers_batman_transition.sh
+```
+
+Run the transition flight with the Gazebo GUI, the signal map, a route window and live Wireshark on the relaying agent:
+
+```bash
+demo/run_container_demo.sh --config config/experiments/batman_transition.yaml --wireshark agent2
+```
+
+Wireshark reads the agent's `mesh0` from a pipe, so it needs no capture permissions. Its display filter, `batadv.unicast
+&& icmp`, shows the relayed pings: on the relay each ping appears twice, arriving from one neighbour and leaving to the
+other with a batman-adv TTL one lower. Compare the Ethernet source and destination columns. The captures of every run
+are also saved in `<log dir>/capture/`. The criteria and results are in [EXPERIMENTS.md](EXPERIMENTS.md), "batman-adv
+mesh".
 
 ## Scenarios
 
-The agent containers run the leader-follower flight by default. `scenario.type: mesh_dropout` in the experiment YAML swaps it for the mesh-dropout demonstration (agents flying seeded random paths whose links drop and recover, with a heartbeat on the radio): `orchestrator/scenario_mesh.py` is called from `agent_main.py` after PX4 is ready, and nothing else in the stack changes. Run it with
-`tests/containers_mesh_dropout.sh` or `demo/run_container_demo.sh --config config/experiments/four_agent_mesh_dropout_baylands.yaml`; see [MESH_DROPOUT.md](MESH_DROPOUT.md).
+The agent containers run the leader-follower flight by default. `scenario.type` in the experiment YAML selects another
+scenario. `orchestrator/agent_main.py` starts PX4, waits until it is ready, and then runs the scenario; nothing else in
+the stack changes.
 
-## Worlds, including custom ones and worlds that download models
+| `scenario.type` | Driver | Test |
+|---|---|---|
+| `leader_follower` | `orchestrator/agent_main.py` | `tests/containers_leader_follower.sh` |
+| `mesh_dropout` | `orchestrator/scenario_mesh.py` | `tests/containers_mesh_dropout.sh` |
+| `rover_drive` | `orchestrator/scenario_rover.py` | `tests/containers_rover.sh` |
+| `custom` | `orchestrator/scenario_custom.py` | `tests/containers_custom_template.sh` |
 
-A world is `worlds/<name>.sdf`. The file name must equal the `<world name="...">` inside it (the pose topic and the health check use
-that name). Select it with `simulator.px4_world_name` in the YAML or `--world <name>` / `PX4_WORLD=<name>`. `worlds/` is mounted into the
-simulator container, so a new world needs no image rebuild.
+[MESH_DROPOUT.md](MESH_DROPOUT.md) describes the mesh-dropout scenario.
 
-Models the world uses can come from three places:
+For `scenario.type: custom`, the agent services use an overlay image, `cosim-agent-custom-<experiment name>`, built from
+`docker/agent-custom.Dockerfile` with the user's workspace as build context. `python3 orchestrator/cosim.py build
+--config <yaml>` builds the stock agent image first, then the overlay. [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md)
+describes the scenario.
 
-| Source | How it works |
+## Worlds
+
+A world is `worlds/<name>.sdf`. The file name must equal the `<world name="...">` inside it, because the pose topic and
+the health check use that name. Select a world with `simulator.px4_world_name`, `--world <name>` or `PX4_WORLD=<name>`.
+`worlds/` is mounted into the simulator container, so a new world needs no image rebuild.
+
+| Model source | How it works |
 |---|---|
-| PX4's Gazebo models (`x500`, ...) | Baked into the simulator image at build time. |
-| Your own models | Put them in `worlds/models/<model name>/` (with `model.config` and `model.sdf`) and refer to them as `model://<model name>`. That directory is on the simulator's resource path. |
-| Gazebo Fuel (a world whose `<uri>` is `https://fuel.gazebosim.org/...`, such as `baylands`) | The stack has no internet, so the models are downloaded once into Gazebo's own cache on the host, `~/.gz/fuel`, which is mounted read-only into the simulator at the same absolute path. |
+| PX4's Gazebo models (`x500`, ...) | Baked into the simulator image at build time |
+| Your own models | Put them in `worlds/models/<model name>/` and refer to them as `model://<model name>` |
+| Gazebo Fuel (a `<uri>` under `https://fuel.gazebosim.org/`) | Downloaded once into `~/.gz/fuel` on the host, which is mounted read-only into the simulator |
 
-Fuel models are handled automatically. `cosim.py up` checks whether the cache holds the models for the chosen world; if not, it starts a
-throw-away container with internet access, loads the world once (so models that other models depend on are fetched too) and records a
-marker that is tied to the hash of the `.sdf`. You can do this ahead of time with `python3 orchestrator/cosim.py fetch-world baylands`
-(or `python3 orchestrator/fuel.py status baylands` to see what is cached).
+Fuel models are handled automatically. `cosim.py up` checks whether the cache holds the models of the chosen world.
+If not, it starts a throw-away container with internet access, loads the world once and records a marker tied to the
+hash of the `.sdf`.
 
-- Cache location: `~/.gz/fuel`, the cache native Gazebo uses, owned by you. The simulator container mounts it at the same absolute path and runs with your
-  `HOME`. This matters for the GUI: the server tells a connected GUI the absolute file paths of the meshes and textures it resolved, so those paths must exist on the host
-  too. With the cache inside the container as `/root/.gz/fuel` the host GUI crashed on `Permission denied` (observed 2026-10-21). `baylands` takes about 410 MB.
-- `COSIM_NO_FETCH=1` forbids downloading and makes `up` fail with the command to run instead (offline or locked-down runs).
-- Each run writes `fuel_models.txt` in its log directory with the world file's hash and the cached version of each model it names. Fuel serves
-  the latest version for a URI that names none, so a cache filled later can differ from an earlier one. The list covers the models the
-  world names directly, not the ones those models depend on.
+Fetch a world ahead of time, or show what is cached:
+
+```bash
+python3 orchestrator/cosim.py fetch-world baylands
+python3 orchestrator/fuel.py status baylands
+```
+
+- The cache is `~/.gz/fuel`, the cache native Gazebo uses. The simulator container mounts it at the same absolute path
+  and runs with the user's `HOME`. A connected GUI receives absolute file paths from the server, so those paths must
+  also exist on the host.
+- `baylands` takes about 410 MB.
+- `COSIM_NO_FETCH=1` forbids downloading. `up` then fails and prints the command to run.
+- Each run writes `fuel_models.txt` to its log directory, with the hash of the world file and the cached version of each
+  model the world names. Fuel serves the latest version for a URI that names none.
 - Editing the `.sdf` invalidates the marker, and the next `up` fetches again.
 
-Baylands needs a config with matching spawn heights, because its terrain rises with y:
+Baylands needs a configuration with matching spawn heights, because its terrain rises with y:
 
-```
+```bash
 demo/run_container_demo.sh --config config/experiments/five_agent_wifi_baylands.yaml --world baylands
 PX4_WORLD=baylands tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi_baylands.yaml
 ```
 
-Tested (2026-10-21, single runs, `five_agent_wifi_baylands.yaml`, offline simulator container): headless, all checks passed (formation error p95 1.90 to 1.94 m,
-swarm loss 0 %, ns-3 lag max 0.148 ms, RTF worst 5-s window 0.993). With the host Gazebo GUI and the live map attached (`demo/run_container_demo.sh` as above,
-three runs after the path fix), 25 of 25 checks passed in each (RTF worst window 0.981 to 0.998); the GUI listed `park`, `coast_waves` and `x500_0` to `x500_4` and the map
-updated during the flight (screenshot taken mid-flight). The GUI's 3-D view was not inspected for texture quality. A world with a model in `worlds/models/` loaded and showed
-that model in `gz model --list`; no flight was run on it.
+## Troubleshooting
 
-## Operations
+| Symptom | Cause | Fix |
+|---|---|---|
+| `cosim.py build` fails with `Temporary failure resolving` | Containers on the Docker bridge have no internet access on this host, while the host itself has | Build with the host's network: `python3 orchestrator/cosim.py build --host-network`. The experiments themselves need no internet |
+| `cosim: this experiment uses batman-adv mesh routing ...` | The `batman_adv` kernel module is not loaded on the host | See [batman-adv mesh routing](#batman-adv-mesh-routing) under Requirements |
 
-- `python3 orchestrator/cosim.py build [service...]` builds the images (`docker compose build` on a generated project). First build: ns-3 compiles (a few
-  minutes on 16 cores); the agent and simulator images are built on the PX4 runtime image (`docker build -t cosim-px4-runtime px4/`, see
-  [px4/README.md](../px4/README.md)) and share its layers, so they add little disk space. The base is large (about 12.5 GB on disk) because it keeps the PX4 build tree.
-  Override it with `docker compose build --build-arg PX4_RUNTIME_IMAGE=<image>`.
-- `python3 orchestrator/cosim.py up --config YAML --out DIR [--mode flight|net]` starts a stack, `down --out DIR` removes it and hands `DIR` back to you
-  (the containers write as root). The tests call these and tear down on exit and on interrupt (checked with SIGTERM).
-- After an interrupted run: `python3 orchestrator/cosim.py down --out <the run's log dir>`, or `docker compose -p cosim-<experiment name> down`.
-- `tests/containers_leader_follower.sh` honours `SIDE`, `ALT`, `SPEED`, `OFFSET`, `PX4_WORLD` and `OUT` like its native counterpart.
+The first case was observed on the development machine on 2026-11-17: DNS queries and TCP connections from a container
+on the default bridge timed out, while a container with the host's network resolved names. The cause on the host was not
+investigated.
+
+## Results
+
+Single runs on the development machine, `five_agent_wifi_baylands.yaml`, offline simulator container, 2026-10-21.
+They are not statistics.
+
+| Command | Runs | Outcome |
+|---|---|---|
+| `PX4_WORLD=baylands tests/containers_leader_follower.sh --config ...` (headless) | 1 | All checks pass. Formation error p95 1.90 m to 1.94 m, swarm loss 0 %, ns-3 lag at most 0.148 ms, worst 5 s real-time-factor window 0.993 |
+| `demo/run_container_demo.sh --config ... --world baylands` (GUI and map) | 3 | 25 of 25 checks pass in each. Worst real-time-factor window 0.981 to 0.998 |
+
+In the GUI runs, the GUI listed `park`, `coast_waves` and `x500_0` to `x500_4`, and the map updated during the flight.
+
+Wi-Fi standards: the 802.11a, 802.11g and 802.11n examples pass `tests/containers_static_link.sh` (single runs).
 
 ## Limitations
 
-- The Gazebo GUI is not inside the stack (the containers are headless); `demo/run_container_demo.sh` attaches the host's GUI to it (see above).
-- Worlds that reference Fuel models need a one-time download on the host (see "Worlds"); the default world, `px4_flat`, needs none.
-- PX4's Gazebo models are fetched from the `PX4-gazebo-models` repository's main branch when the simulator image is built; they are not pinned.
-- Containers run as root and keep `NET_ADMIN` (needed to wire the interfaces; the simulator container uses it for one multicast route).
-- The host's Docker bridge for each link network also receives the frames on that link. The source-MAC guard keeps host-originated frames (IPv6 neighbour
-  discovery, IGMP) off the emulated channel.
-- The agents' flight DDS path still uses `radio0`'s address over loopback ([ARCHITECTURE.md](ARCHITECTURE.md), Limitations). That limitation is documented
-  for the native setup; it has not been tested what stopping the `ns3` container mid-flight does to the agents.
-- Isaac Sim is a documented extension, not an implemented one.
+- Isaac Sim is an experimental spike. Not implemented: sensors other than one camera, a ROS 2 camera publisher, pacing
+  the simulation to wall time, rovers, NVIDIA environments.
+- Pegasus Simulator supports multirotors only (its README and vehicle page, checked 2026-11-03), so no rover exists for
+  Isaac Sim.
+- Isaac Sim's vehicle link holds real time for one multirotor only. Four multirotors flew the mesh-dropout scenario in
+  one run at a real-time factor of about 0.6, so that run is not valid. See [EXPERIMENTS.md](EXPERIMENTS.md).
+- The fixed-wing `rc_cessna` in the mesh-dropout scenario is work in progress. It has no passing run and is not
+  documented further.
+- Not implemented: a rover leader-follower scenario, terrain-aware spawn heights, ground-level obstacle checks.
+- 802.11ac and 802.11ax are accepted by the scenario and not tested. `tools/link_budget.py` predicts range for 802.11a
+  only.
+- The Gazebo GUI is not inside the stack. The host's GUI attaches to it. The texture quality of the 3-D view is not
+  inspected.
+- A world with a model in `worlds/models/` loads and lists that model. No flight is tested on such a world.
+- `fuel_models.txt` covers the models a world names directly, not the models those depend on.
+- PX4's Gazebo models are fetched from the main branch of the `PX4-gazebo-models` repository at image build. They are
+  not pinned.
+- Containers run as root and keep `NET_ADMIN`, which wiring the interfaces needs.
+- batman-adv is tested with three agents in a line, B.A.T.M.A.N. IV and the default originator interval only. Not
+  tested: more agents, more than two hops, B.A.T.M.A.N. V, the native deployment, Docker Desktop.
+- The host's Docker bridge for each link network also receives the frames on that link. The source-MAC guard keeps
+  host-originated frames off the emulated channel.
+- The agents' flight DDS path uses the address of `radio0` over loopback. See [ARCHITECTURE.md](ARCHITECTURE.md). The
+  effect of stopping the `ns3` container mid-flight is not tested.

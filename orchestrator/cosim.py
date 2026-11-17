@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host-side driver for the Docker deployment: build the images, start and stop a stack.
 
-    cosim.py build [--config YAML]                  build the images the experiment needs (docker compose build)
+    cosim.py build [--config YAML] [--host-network] build the images the experiment needs (docker compose build)
     cosim.py up   --config YAML --out DIR [--mode flight|net] [--world W] [--no-firewall] [--timeout S]
                                                      generate the compose project in DIR/compose, start it, wait until healthy
     cosim.py fetch-world W                         download the Fuel models a world needs into the cache (also done by `up`)
@@ -20,6 +20,7 @@ import tempfile
 import yaml
 
 import compose_gen
+import containers
 import fuel
 import simulators
 
@@ -41,11 +42,36 @@ def cmd_build(a):
     cfg = yaml.safe_load(open(a.config))
     with tempfile.TemporaryDirectory() as tmp:
         path = compose_gen.generate(cfg, tmp, mode="flight")
+        net = ["--network", "host"] if a.host_network else []
+        if a.host_network:
+            # every build container uses the host's network: for hosts whose Docker bridge has no outbound internet (docs/CONTAINERS.md, Troubleshooting)
+            c = yaml.safe_load(open(path))
+            for svc in c["services"].values():
+                if "build" in svc:
+                    svc["build"]["network"] = "host"
+            yaml.safe_dump(c, open(path, "w"), sort_keys=False)
+        if (cfg.get("scenario") or {}).get("type") == "custom":
+            # the agent services use an overlay image (docker/agent-custom.Dockerfile) that starts FROM the stock agent image, so build that first
+            subprocess.run(["docker", "build", *net, "-f", os.path.join(compose_gen.ROOT, "docker", "agent.Dockerfile"),
+                            "-t", f"{compose_gen.AGENT_IMAGE}:latest", compose_gen.ROOT], check=True)
         subprocess.run(["docker", "compose", "-f", path, "build", *a.services], check=True)
+
+
+MODULE_HELP = """cosim: this experiment uses batman-adv mesh routing (network.mesh), which needs the batman_adv kernel module on the host.
+Containers share the host's kernel and cannot load modules themselves. Load it once (docs/CONTAINERS.md, "batman-adv mesh routing"):
+    sudo modprobe batman_adv
+If modprobe reports that the module is not found, install it first:
+    sudo apt install linux-modules-extra-$(uname -r)"""
 
 
 def cmd_up(a):
     cfg = yaml.safe_load(open(a.config))
+    try:
+        mesh = containers.mesh(cfg)
+    except ValueError as e:
+        sys.exit(f"cosim: {e}")
+    if mesh and not os.path.isdir("/sys/module/batman_adv"):
+        sys.exit(MODULE_HELP)
     os.makedirs(a.out, exist_ok=True)
     if a.mode == "flight" and cfg["simulator"]["type"] == "gazebo":
         world = simulators.get(cfg)["world"](cfg, a.world)
@@ -85,6 +111,8 @@ def main():
     b = sub.add_parser("build")
     b.add_argument("--config", default=DEFAULT_CONFIG)
     b.add_argument("services", nargs="*", help="limit the build to these services (simulator, ns3, agent1, ...)")
+    b.add_argument("--host-network", action="store_true",
+                   help="build with the host's network (when the Docker bridge has no internet access: package downloads fail to resolve names)")
     u = sub.add_parser("up")
     u.add_argument("--config", default=DEFAULT_CONFIG)
     u.add_argument("--out", required=True)

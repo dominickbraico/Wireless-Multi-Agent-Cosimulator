@@ -22,6 +22,7 @@ import os
 import yaml
 
 import containers
+import custom_config
 import fuel
 import simulators
 import technologies
@@ -83,10 +84,13 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "environment": {**s["environment"], "COSIM_CONFIG": "/config/experiment_run.yaml",
                             "HOME": os.path.expanduser("~")},      # so Gazebo resolves Fuel models to the host's paths (fuel.py)
             "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro",
-                                     f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"],   # Fuel models, at the host's own path (fuel.py)
-            "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": 60},
+                                     f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"]    # Fuel models, at the host's own path (fuel.py)
+                       + s.get("volumes", []),                                       # driver-specific mounts (Isaac Sim GUI: the host's X11 socket)
+            "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": s.get("healthcheck_retries", 60)},
             "stop_grace_period": "10s",
         }
+        if s.get("gpu"):                                # the one service that needs the NVIDIA runtime (Isaac Sim)
+            services["simulator"]["deploy"] = {"resources": {"reservations": {"devices": [{"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}]}}}
 
     ns3_nets = {mgmt_net: {"ipv4_address": plan["mgmt"]["ns3_ip"]}}
     for name, p in plan["agents"].items():
@@ -105,20 +109,29 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
         "stop_grace_period": "20s",       # ns-3 writes summary.json on SIGTERM
     }
 
+    # Agent image: the stock one, or for `scenario.type: custom` an overlay that adds the user's workspace
+    # (docker/agent-custom.Dockerfile; its build context is that workspace, so nothing else of the host is sent to Docker).
+    agent_image, agent_build = f"{AGENT_IMAGE}:latest", {"context": ROOT, "dockerfile": "docker/agent.Dockerfile"}
+    if (cfg.get("scenario") or {}).get("type") == "custom":
+        custom = custom_config.load(cfg)                  # also validates the section before anything starts
+        agent_image = f"{custom_config.image_tag(cfg)}:latest"
+        agent_build = {"context": custom["workspace"], "dockerfile": os.path.join(ROOT, "docker", "agent-custom.Dockerfile"),
+                       "args": {"AGENT_IMAGE": f"{AGENT_IMAGE}:latest"}}
+
     deps = {"ns3": {"condition": "service_healthy"}}
     if mode == "flight":
         deps["simulator"] = {"condition": "service_healthy"}
     for a in cfg["agents"]:
         n, p = a["name"], plan["agents"][a["name"]]
-        ready = f"test -f /logs/{n}.px4_ready" if mode == "flight" else "ip -br addr show radio0 | grep -q UP"
+        ready = f"test -f /logs/{n}.px4_ready" if mode == "flight" else f"ip -br addr show radio0 | grep -q ' {p['radio_ip']}/'"
         agent_env = {"COSIM_AGENT": n, "COSIM_MODE": mode, "COSIM_CONFIG": "/config/experiment_run.yaml",
                      "HOST_UID": uid, "HOST_GID": gid}
         for k in ("ALT", "SIDE", "SPEED", "OFFSET"):
             if env.get(k):
                 agent_env[k] = env[k]
         services[n] = {
-            "image": f"{AGENT_IMAGE}:latest",
-            "build": {"context": ROOT, "dockerfile": "docker/agent.Dockerfile"},
+            "image": agent_image,
+            "build": agent_build,
             "hostname": n,
             "networks": {mgmt_net: {"ipv4_address": p["mgmt_ip"]}, p["link_net"]: {"ipv4_address": p["agent_link_ip"]}},
             "cap_add": ["NET_ADMIN"],
@@ -126,7 +139,7 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "depends_on": deps,
             "environment": agent_env,
             "volumes": common_vol,
-            "healthcheck": {"test": ["CMD-SHELL", ready], "interval": "3s", "timeout": "3s", "retries": 100},
+            "healthcheck": {"test": ["CMD-SHELL", ready], "interval": "3s", "timeout": "3s", "retries": 150},
             "stop_grace_period": "10s",
         }
 

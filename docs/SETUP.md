@@ -1,53 +1,82 @@
 # Setup
 
-Developed and tested on Ubuntu 24.04 (Linux 6.8).
+How to build and run the native deployment. For the Docker deployment, which needs only Docker on the host, see
+[CONTAINERS.md](CONTAINERS.md).
 
 ## Requirements
 
-- ROS 2 Jazzy and `ros-jazzy-rmw-cyclonedds-cpp`
-- Gazebo Harmonic
-- Docker (only to build the PX4 image from which the PX4 runtime is extracted)
-- `iproute2`, `nftables` (`nft`), `tcpdump`, `libyaml-cpp-dev`, a C++ toolchain and CMake (for ns-3)
-- Python 3 with `matplotlib` and `PyYAML`
-- Root, or the rootless wrapper `tests/run_rootless.sh` (needs unprivileged user namespaces)
+Developed and tested on Ubuntu 24.04 (Linux 6.8).
+
+| Requirement | Used for |
+|---|---|
+| ROS 2 Jazzy and `ros-jazzy-rmw-cyclonedds-cpp` | Robot software and the default DDS implementation |
+| Gazebo Harmonic | Physics simulation |
+| Docker | Building the PX4 image from which the PX4 runtime is extracted |
+| `iproute2`, `nftables`, `tcpdump` | Network wiring, firewall, packet capture |
+| `libyaml-cpp-dev`, a C++ toolchain, CMake | Building ns-3 and the scenarios |
+| Python 3 with `matplotlib` and `PyYAML` | Orchestration and analysis |
+| Root, or unprivileged user namespaces | Creating network namespaces (`tests/run_rootless.sh` uses the latter) |
 
 ## Build
 
-To run everything in Docker instead (nothing but Docker on the host), see [CONTAINERS.md](CONTAINERS.md): build the PX4 runtime image
-(`docker build -t cosim-px4-runtime px4/`, below) once, then `python3 orchestrator/cosim.py build`. The rest of this page is the native setup.
+1. Build ns-3 3.48 and the scenarios. The script downloads ns-3, applies the local patch and builds into
+   `~/dev/ns-3-build`:
 
-1. **ns-3 3.48 and the scenarios** (downloads ns-3, applies the local patch, builds into `~/dev/ns-3-build`):
-   ```
+   ```bash
    ns3/build_ns3.sh
    ```
-   Re-run it only when the C++ under `ns3/scenarios/` or `ns3/patches/` changes. Tests find the binary under `~/dev/ns-3-build`; override with `NS3=<path>`.
-2. **ROS 2 workspace** (`swarm_msgs`, `swarm_control`, `px4_offboard_control`):
-   ```
+
+   Re-run it only when the C++ under `ns3/scenarios/` or the patch changes. Tests find the build under
+   `~/dev/ns-3-build`; override with `NS3=<path>`.
+
+2. Build the ROS 2 workspace:
+
+   ```bash
    (cd ros2_ws && colcon build --symlink-install)
    ```
-3. **Network-only tests** (`static_link`, `ros2_isolation`, `swarm_leader_follower`, `pose_feed`, `distance_sweep`) need nothing more.
-4. **Flight tests** also need the PX4 runtime:
-   - Build the PX4 image: `docker build -t cosim-px4-runtime px4/` (a long build; it compiles PX4).
-   - Run `tools/setup_px4_runtime.sh`. It extracts PX4 SITL, the Micro XRCE-DDS Agent and `px4_msgs` into `~/dev/px4-runtime` (override with `PX4_RUNTIME`).
-   - Run `px4/fetch_gazebo_models.sh` to download PX4's Gazebo models and server configuration into `~/.simulation-gazebo`.
-   - The PX4 version is pinned in `px4/Dockerfile`. See `px4/README.md`.
-   - `tools/setup_px4_runtime.sh` has not yet been validated on a clean machine.
 
-## Run
+   The network-only tests (`static_link`, `ros2_isolation`, `swarm_leader_follower`, `pose_feed`, `distance_sweep`)
+   need nothing more.
 
-```
+3. For flight tests, build the PX4 image, extract the runtime and fetch PX4's Gazebo models:
+
+   ```bash
+   docker build -t cosim-px4-runtime px4/
+   tools/setup_px4_runtime.sh
+   px4/fetch_gazebo_models.sh
+   ```
+
+   The first command compiles PX4 and takes a long time. The second extracts PX4 SITL, the Micro XRCE-DDS Agent and
+   `px4_msgs` into `~/dev/px4-runtime`; override with `PX4_RUNTIME=<path>`. The third downloads into
+   `~/.simulation-gazebo`. The PX4 version is pinned in `px4/Dockerfile`.
+
+## Quick start
+
+Run a network-only check, then a five-robot flight, without sudo:
+
+```bash
 tests/run_rootless.sh tests/static_link.sh
 tests/run_rootless.sh tests/leader_follower_fly.sh --config config/experiments/five_agent_wifi.yaml
+```
+
+Run a flight as root instead:
+
+```bash
 sudo tests/leader_follower_fly.sh
 ```
 
-See [EXPERIMENTS.md](EXPERIMENTS.md) for what each test checks and [CONFIGURATION.md](CONFIGURATION.md) for the experiment file.
+[EXPERIMENTS.md](EXPERIMENTS.md) describes what each test checks. [CONFIGURATION.md](CONFIGURATION.md) describes the
+experiment file.
 
 ## Troubleshooting
 
-- **PX4 starts but Gazebo is not found.** ROS 2 ships a stub `gz` that shadows the real binary and PX4's start-up script calls `gz --versions`.
-  Every process that starts PX4 needs `/usr/bin` first on `PATH` (the scripts do this).
-- **PX4 fails with "px4_daemon: error connecting to socket".** Stale `/tmp/px4-sock-*` and `/tmp/px4_lock-*` files from an interrupted run. `demo/cleanup.sh` removes them;
-  each PX4 started by `run_stack.py` uses a private `/tmp`.
-- **Leftover namespaces, bridges or processes after an interrupt.** Run `demo/cleanup.sh`.
-- **Run reported invalid.** The ns-3 lag or Gazebo real-time-factor check failed; reduce the number of vehicles or free CPU.
+| Symptom | Cause | Fix |
+|---|---|---|
+| PX4 starts but does not find Gazebo | ROS 2 ships a stub `gz` that shadows the real binary | Put `/usr/bin` first on `PATH` for every process that starts PX4. The scripts do this. |
+| `px4_daemon: error connecting to socket` | Stale `/tmp/px4-sock-*` and `/tmp/px4_lock-*` files from an interrupted run | Run `demo/cleanup.sh`. |
+| Leftover namespaces, bridges or processes | An interrupted run | Run `demo/cleanup.sh`. |
+| Run reported invalid | The ns-3 lag or real-time-factor check failed | Reduce the number of vehicles or free CPU. |
+
+## Limitations
+
+- `tools/setup_px4_runtime.sh` is not tested on a clean machine.
