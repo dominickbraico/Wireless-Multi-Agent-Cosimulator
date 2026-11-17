@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>radio_relay</name>
+  <version>0.1.0</version>
+  <description>Copies the topics listed for an experiment between an agent's local DDS domain and the emulated radio domain.</description>
+  <maintainer email="dominickbraico32@gmail.com">Dominick</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

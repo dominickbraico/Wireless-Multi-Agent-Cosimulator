@@ -289,6 +289,7 @@ To add a vehicle, add one entry to `VEHICLES` per simulator that can run it, and
 | `leader_follower` | Multirotors only: it flies 3-D position setpoints |
 | `mesh_dropout`, mode `roam` | Mixed: a multirotor runs `mesh_flight`, a rover runs `mesh_drive` |
 | `rover_drive` | Rovers only |
+| `custom` | Any vehicle the user's controller drives; tested with multirotors only |
 
 ## Network technology
 
@@ -370,8 +371,14 @@ the stack changes.
 | `leader_follower` | `orchestrator/agent_main.py` | `tests/containers_leader_follower.sh` |
 | `mesh_dropout` | `orchestrator/scenario_mesh.py` | `tests/containers_mesh_dropout.sh` |
 | `rover_drive` | `orchestrator/scenario_rover.py` | `tests/containers_rover.sh` |
+| `custom` | `orchestrator/scenario_custom.py` | `tests/containers_custom_template.sh` |
 
 [MESH_DROPOUT.md](MESH_DROPOUT.md) describes the mesh-dropout scenario.
+
+For `scenario.type: custom`, the agent services use an overlay image, `cosim-agent-custom-<experiment name>`, built from
+`docker/agent-custom.Dockerfile` with the user's workspace as build context. `python3 orchestrator/cosim.py build
+--config <yaml>` builds the stock agent image first, then the overlay. [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md)
+describes the scenario.
 
 ## Worlds
 

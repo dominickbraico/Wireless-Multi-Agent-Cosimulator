@@ -9,6 +9,7 @@ configuration and command. All results are single runs on one machine unless sta
 - [Test scripts](#test-scripts)
 - [Leader-follower flight](#leader-follower-flight)
 - [Rover drive test](#rover-drive-test)
+- [Custom controller](#custom-controller)
 - [Isaac Sim stages](#isaac-sim-stages)
 - [Demo with the Gazebo GUI](#demo-with-the-gazebo-gui)
 - [Reference results](#reference-results)
@@ -55,6 +56,8 @@ tests/containers_static_link.sh
 | `tests/containers_rover.sh` | Docker | Two rovers each drive a square |
 | `tests/mesh_plan.sh` | Offline | The mesh-dropout flight plans, both modes, 40 seeds each |
 | `tests/containers_mesh_dropout.sh` | Docker | The mesh-dropout flight; criteria in [MESH_DROPOUT.md](MESH_DROPOUT.md) |
+| `tests/custom_relay.sh` | Loopback | The radio relay, YAML validation of the custom scenario, the radio analyzer, the template controller |
+| `tests/containers_custom_template.sh` | Docker | The custom scenario with the template controller |
 | `tests/px4_mavlink_link.sh` and four more | Docker | Isaac Sim stages A to F, below |
 
 - `tests/static_link.sh` also checks the ns-3 lag and that the pcap holds 802.11 frames.
@@ -142,6 +145,94 @@ Pass criteria per rover, fixed before the first run:
 | Validity | As for the leader-follower flight, measured from the go signal |
 
 Outputs: `rover/rover_<agent>.csv` (PX4 local position), `<agent>_flight.log`, `rover_report.json`.
+
+## Custom controller
+
+The scenario and its contract are described in [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md). The criteria below were
+fixed on 2026-11-17 before the first run.
+
+### Loopback test
+
+Two or three relays stand in for agents, each bridging its own local domain to a shared radio domain. The test needs no
+Docker, PX4 or ns-3, only ROS 2 Jazzy with the workspaces built and sourced:
+
+```bash
+(cd ros2_ws && colcon build --symlink-install)
+(cd examples/template_ws && colcon build)
+source ros2_ws/install/setup.bash
+source examples/template_ws/install/setup.bash
+tests/custom_relay.sh
+```
+
+| Check | Criterion |
+|---|---|
+| R1 | 100 distinct messages on a listed topic in agent A's local domain arrive in agent B's local domain, unchanged |
+| R2 | No echo: 100 messages published in A are received exactly 100 times in A and in B; relay A logs 100 `tx` and 0 `rx` rows |
+| R2b | 50 identical payloads published on each side at once: each side receives exactly 100 |
+| R3 | A topic that is not listed does not cross |
+| R4 | The radio-side QoS equals the topics file (reliable, transient_local, depth 3) |
+| R4b | Reliable and transient_local: restarting relay B does not make relay A send again |
+| E1 | An unknown message type makes the relay exit with code 2 and a message naming the type |
+| R5 | 12 invalid `scenario.custom` sections are refused, each naming the key; a valid one with a space in its workspace path is accepted |
+| A1 | `tools/analyze_radio.py` matches 9 of 10 hand-written messages by payload, reports 4 ms latency, and exits 1 below `--min-delivery` |
+| C1 | The template controller without vehicles: three agents starting at 4 m, 6 m and 8 m agree within 0.1 m after 20 s through three relays |
+
+The count checks use a reliable topic. They test the relay's forwarding, not loss.
+
+| Date | Run | Outcome |
+|---|---|---|
+| 2026-11-17 | Single run, Cyclone DDS | All 23 checks PASS. C1: final spread 0.000 m, mean 5.65 m; delivery 1.000 on all 6 pairs |
+
+### Template flight
+
+Fly the template controller (`examples/template_ws`, altitude consensus) with
+`config/experiments/custom_consensus.yaml`: four x500 on `px4_flat`, a 10 m triangle with its centroid, default radio
+(16 dBm, range about 51 m), radio firewall on, start altitudes 4.0 m, 5.5 m, 7.0 m and 8.5 m, gain 0.3, 40 s of
+consensus at 5 Hz:
+
+```bash
+python3 orchestrator/cosim.py build --config config/experiments/custom_consensus.yaml
+tests/containers_custom_template.sh
+```
+
+`tools/analyze_custom.py` applies the criteria:
+
+| Criterion | Threshold |
+|---|---|
+| Finished | Every agent's launch ends and no agent reports a failed launch or relay |
+| Flight | Every agent takes off, lands and disarms |
+| Start | Start altitudes span at least 3.0 m |
+| Consensus | Over the last 5 s of the consensus phase, the measured altitudes (PX4 local position) are within 0.5 m of each other |
+| Radio | Every ordered pair delivers at least 0.95 of `/swarm/state` |
+| Isolation | No local-domain (0) RTPS, XRCE-DDS or PX4 topic names on the channel; radio-domain (42) RTPS present |
+| Validity | ns-3 lag within `time.max_lag_ms`; Gazebo real-time factor at least `time.min_rtf` from the go signal |
+
+Three variants check the cases the main run does not reach:
+
+| Variant | Criterion |
+|---|---|
+| `CONTROL=1` | The relay carries `/swarm/unused` instead of `/swarm/state`: the final spread stays above 2.0 m |
+| `BROKEN=launch` | The launch file is removed from the running containers: every agent reports `launch failed` and still finishes |
+| `BROKEN=type` | A radio topic names a message type that does not exist: every agent reports `relay failed` naming the type, before the go signal |
+
+Results, single runs on the development machine (16 cores, 31 GB), Docker, 2026-11-17:
+
+| Run | Outcome | Measurements |
+|---|---|---|
+| Template, run 1 | FAIL: agent1's launch failed | `ros2 launch` refused `px4_ns:=` (an empty value, PX4 instance 0). Fixed by leaving empty arguments out; criteria unchanged |
+| Template, run 2 | All checks PASS | Final altitudes 6.00 m for all four agents, spread 0.03 m; delivery 1.000 on all 12 pairs (194 to 196 messages each); latency p50 0.49 ms to 1.15 ms, p99 1.04 ms to 1.82 ms; ns-3 lag at most 0.088 ms; worst real-time-factor window 0.982 |
+| `CONTROL=1` | All checks PASS | Final altitudes 4.00 m, 5.50 m, 7.00 m, 8.50 m, spread 4.52 m |
+| `BROKEN=launch` | PASS | |
+| `BROKEN=type`, run 1 | FAIL | Every relay refused the type and every agent stopped before the go signal, but the agent quoted `ros2 run`'s last line instead of the relay's reason, so the type was not named. The message was fixed; criteria unchanged |
+| `BROKEN=type`, run 2 | PASS | |
+
+Regression after the change: `tests/containers_leader_follower.sh` (default configuration, single run, 2026-11-17)
+passed all checks, with formation error p95 1.74 m, swarm loss 0 %, ns-3 lag at most 0.103 ms and a worst
+real-time-factor window of 0.992.
+
+The relay latency figures cover relay to relay: the loopback hops between the controller nodes and the relays are not
+included. The agents are 5.8 m to 10 m apart, far inside the range, so the run does not test delivery near the range
+edge.
 
 ## Isaac Sim stages
 
@@ -457,6 +548,8 @@ Distance at which UDP loss reaches 1 %, 50 % and 99 % in the distance sweep:
   Gazebo server and lower the real-time factor.
 - The demo's overview camera and `demo/monitor.py` are laid out for the two-agent configuration. The dashboard shows
   only `agent1` and `agent2`.
+- Custom controller: the template run 2 used the image before the `BROKEN=type` message fix; that fix changes only
+  the failure path. Not tested: delivery near the range edge, more than one radio topic, C++ controller nodes.
 - Isaac Sim: the agreement of its world frame with ns-3's frame is assumed, not tested. Pacing the simulation to wall
   time and an upper bound on the real-time factor are not implemented.
 - Isaac Sim stage C does not fly the vehicle; stage D does not measure the real-time factor; stage E uses an empty

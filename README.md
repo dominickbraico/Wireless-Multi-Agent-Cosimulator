@@ -26,6 +26,7 @@ Status: research software under active development. Interfaces and results may c
 - One experiment YAML as the single source of truth for a run.
 - Two deployments: native network namespaces, or Docker Compose with one container per agent.
 - Two flight scenarios: leader-follower formation, and mesh dropout in which links drop and recover.
+- Custom controllers: run your own ROS 2 packages on every agent; the YAML lists which topics cross the radio.
 - Multirotor (PX4 x500) and ground (Aion R1) vehicles in Gazebo Harmonic.
 - Isolation checks: nothing flows between robots without ns-3, and only the swarm DDS domain crosses the radio.
 - Run-validity checks: ns-3 real-time lag and the simulator's real-time factor.
@@ -58,6 +59,13 @@ Run the same flight with the Gazebo GUI and a live signal-strength map:
 demo/run_container_demo.sh
 ```
 
+Run your own controller, starting from the template (see [docs/CUSTOM_CONTROLLERS.md](docs/CUSTOM_CONTROLLERS.md)):
+
+```bash
+python3 orchestrator/cosim.py build --config config/experiments/custom_consensus.yaml
+tests/containers_custom_template.sh
+```
+
 Run the mesh-dropout scenario:
 
 ```bash
@@ -84,6 +92,7 @@ tests/run_rootless.sh tests/leader_follower_fly.sh --config config/experiments/f
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | Tests, outputs, pass criteria, results |
 | [docs/MESH_DROPOUT.md](docs/MESH_DROPOUT.md) | The mesh-dropout scenario |
 | [docs/SIGNAL_MODEL.md](docs/SIGNAL_MODEL.md) | The received-power equation, its parameters and their origin |
+| [docs/CUSTOM_CONTROLLERS.md](docs/CUSTOM_CONTROLLERS.md) | Running your own ROS 2 packages: YAML keys, launch arguments, radio topics |
 | [docs/STYLE.md](docs/STYLE.md) | Documentation rules |
 | [ns3/patches/README.md](ns3/patches/README.md) | The local ns-3 patch |
 
@@ -96,7 +105,8 @@ tests/run_rootless.sh tests/leader_follower_fly.sh --config config/experiments/f
 | `orchestrator/` | Network wiring, process launchers, scenario drivers, Docker Compose generator (`cosim.py`) |
 | `docker/` | Dockerfiles and entrypoints for the ns-3, agent and simulator containers |
 | `adapters/` | Simulator adapters: Gazebo pose bridge and sweep driver, Isaac Sim scene script and pose feed |
-| `ros2_ws/src/` | ROS 2 packages: `swarm_msgs`, `swarm_control`, `mesh_msgs`, `mesh_control`, `px4_offboard_control` |
+| `ros2_ws/src/` | ROS 2 packages: `swarm_msgs`, `swarm_control`, `mesh_msgs`, `mesh_control`, `px4_offboard_control`, `radio_relay` |
+| `examples/` | Template workspace for a custom controller |
 | `tests/` | Acceptance and experiment scripts |
 | `tools/` | Analysis, plotting, link budget, PX4 runtime setup |
 | `demo/` | GUI demos and cleanup |

@@ -62,6 +62,7 @@ The emulation path, DDS domains, swarm protocol and validity checks below are id
 | Mesh node | `ros2_ws/src/mesh_control` | Mesh-dropout radio node: all-to-all heartbeat |
 | Flight nodes | `ros2_ws/src/px4_offboard_control` | Offboard control of PX4 on the local domain |
 | Messages | `ros2_ws/src/swarm_msgs`, `ros2_ws/src/mesh_msgs` | `LeaderState`, `PeerState` |
+| Radio relay | `ros2_ws/src/radio_relay` | Custom scenario: copies the topics listed in the YAML between the two domains |
 
 ## Wireless emulation path
 
@@ -118,7 +119,9 @@ reach separate local control from inter-robot traffic:
 | 0 | Localhost only (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) | PX4 topics (`/fmu/...`) and the follower target |
 | 42 | Bound to `radio0` | The swarm message only |
 
-The radio node is one process with two ROS 2 contexts, one per domain, connected by function calls.
+The radio node is one process with two ROS 2 contexts, one per domain, connected by function calls. In the custom
+scenario the radio node is the relay (C++), which copies the topics listed in the YAML as serialized bytes, so users'
+nodes stay on the local domain. See [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md).
 
 A default-deny nftables policy on `radio0` allows only the UDP ports of domain 42. It exists because the XRCE agent
 otherwise advertises PX4 topics on every interface. Counters report blocked attempts. The isolation checks confirm that

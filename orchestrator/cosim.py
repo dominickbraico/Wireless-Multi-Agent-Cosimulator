@@ -41,6 +41,10 @@ def cmd_build(a):
     cfg = yaml.safe_load(open(a.config))
     with tempfile.TemporaryDirectory() as tmp:
         path = compose_gen.generate(cfg, tmp, mode="flight")
+        if (cfg.get("scenario") or {}).get("type") == "custom":
+            # the agent services use an overlay image (docker/agent-custom.Dockerfile) that starts FROM the stock agent image, so build that first
+            subprocess.run(["docker", "build", "-f", os.path.join(compose_gen.ROOT, "docker", "agent.Dockerfile"),
+                            "-t", f"{compose_gen.AGENT_IMAGE}:latest", compose_gen.ROOT], check=True)
         subprocess.run(["docker", "compose", "-f", path, "build", *a.services], check=True)
 
 

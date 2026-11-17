@@ -47,6 +47,7 @@ Editing a YAML never requires rebuilding ns-3. ns-3 reads the file each time it 
 | `isaac_one_agent.yaml` | 1 Iris | Isaac Sim spike (experimental) |
 | `isaac_camera.yaml` | 1 Iris | Isaac Sim spike with a camera (experimental) |
 | `isaac_four_agent_mesh_dropout.yaml` | 4 Iris | Mesh-dropout scenario in Isaac Sim (experimental; does not hold real time) |
+| `custom_consensus.yaml` | 4 x500 | Custom-controller scenario with the template controller (altitude consensus) |
 
 The range figures come from the distance sweep reported in [EXPERIMENTS.md](EXPERIMENTS.md).
 
@@ -100,6 +101,7 @@ Values of `scenario`:
 | `leader_follower` (default) | One leader flies a square; followers hold a formation | None. See [Roles and formation](#roles-and-formation) |
 | `mesh_dropout` | Agents fly seeded paths so that links drop and recover | `scenario.mesh_dropout.*`, listed in [MESH_DROPOUT.md](MESH_DROPOUT.md) |
 | `rover_drive` | Every agent is a rover and drives a square | `scenario.rover_drive.side_m`, `speed_mps`, `acceptance_radius_m` |
+| `custom` | Every agent runs your own ROS 2 launch file; listed topics cross the radio | `scenario.custom.*`, listed in [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md) |
 
 Values of `simulator`:
 
@@ -131,6 +133,7 @@ An agent entry looks like this:
 | `vehicle` | No | Vehicle type: `x500` (default), `r1_rover`, `iris` or `rc_cessna`. Docker deployment only |
 | `role` | No | `leader` or `follower` |
 | `follower_offset` | No | `[x, y, z]` formation offset from the leader, world frame |
+| `launch_args` | No | Launch arguments for this agent, `scenario.type: custom` only. See [CUSTOM_CONTROLLERS.md](CUSTOM_CONTROLLERS.md) |
 | `camera` | No | `{width, height, rate_hz, save_every}`. `simulator.type: isaac` only |
 
 Notes on `vehicle`:
