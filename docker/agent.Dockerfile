@@ -11,7 +11,7 @@ ARG PX4_RUNTIME_IMAGE=cosim-px4-runtime:latest
 FROM ${PX4_RUNTIME_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        iproute2 nftables iputils-ping tcpdump python3-yaml python3-colcon-common-extensions \
+        iproute2 nftables iputils-ping tcpdump python3-yaml python3-colcon-common-extensions batctl \
         ros-jazzy-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 

@@ -1,0 +1,86 @@
+# Single source of truth for an experiment. Read by the ns-3 scenario, the
+# orchestrator and (later) the pose bridge. A copy is saved in every run's log dir.
+experiment:
+  name: batman_transition
+  duration_s: 60
+  log_dir: logs/${name}_${timestamp}
+time:
+  ns3_sync_mode: BestEffort        # BestEffort | HardLimit
+  ns3_hard_limit_s: 0.1
+  max_lag_ms: 10                   # run flagged invalid above this
+  min_rtf: 0.95
+  rtf_window_s: 5.0                # sliding-mean window for the RTF validity check
+network:
+  backend: ns3                     # network emulator engine (only ns3 exists; a 'netem' stress backend would be another)
+  technology: wifi                 # radio technology = which ns-3 scenario runs; see docs/CONTAINERS.md 'Changing the networking technology'
+  wifi:
+    standard: 80211a
+    mac: adhoc
+    rate_manager: ConstantRate
+    data_mode: OfdmRate12Mbps
+    control_mode: OfdmRate6Mbps
+    tx_power_dbm: 4.0          # reduced from 16 so that one drone can be cut off from all others by a short trip (range to the -82 dBm cutoff about 20.5 m)
+    error_rate_model: TableBased   # TableBased (ns-3 default for Yans) | Nist
+    retry_limit: null              # null = ns-3 default (7 attempts)
+    phy:                           # receiver parameters; defaults are ns-3's, all hardware-measurable
+      rx_noise_figure_db: 7.0
+      preamble_detection_min_rssi_dbm: -82.0   # frames weaker than this are never detected (hard cutoff)
+      preamble_detection_snr_db: 4.0           # ... or with SNR below this
+      cca_ed_threshold_dbm: -62.0
+      rx_sensitivity_dbm: -101.0
+  channel:
+    loss:
+      - {type: LogDistance, exponent: 3.0, ref_distance_m: 1.0, ref_loss_db: 46.6777}
+    delay: ConstantSpeed
+  pose:
+    transport: udp
+    listen_addr: 127.0.0.1         # where the ns-3 pose listener binds (mgmt network in Docker)
+    port: 5600
+    rate_hz: 50
+  radio_subnet: 10.10.0.0/24
+  mesh:                            # batman-adv mesh routing in every agent (docs/CONTAINERS.md); the host must have the batman_adv module loaded
+    routing: batman_adv
+    orig_interval_ms: 1000         # originator message interval (batman-adv's default)
+  radio_firewall:                  # default-deny on radio0 inside each agent; absent = no firewall (link tests)
+    enabled: false                 # the PX4 flight tests turn this on
+    allow_udp_ports: [17900, 18149]
+    allow_icmp_echo: true          # ping across the radio for the demo and check T2 (echo request/reply only; docs/CONFIGURATION.md)   # RTPS ports of DDS domain 42 (7400 + 250*42 .. +249)
+  mgmt:                            # unemulated management network: simulator <-> agents, never agent <-> agent
+    bridge: br-mgmt
+    subnet: 10.20.0.0/24
+    bridge_ip: 10.20.0.1           # simulator side (Gazebo, pose bridge, ns-3) lives here
+# batman-adv transition demo: agent1 and agent2 hover 14 m apart; agent3 starts between them and flies east, past agent2, to a point
+# about 27 m from agent1 (beyond the 20.5 m range at Tx 4 dBm) and 13 m from agent2, holds there and returns. While it is out there,
+# batman-adv routes agent1 <-> agent3 through agent2. All three on one line (y = 0) for a clear side view.
+agents:
+  - {name: agent1, radio_ip: 10.10.0.1, mgmt_ip: 10.20.0.11, px4_instance: 0, px4_gz_model: x500_0, spawn_pose: [0.0, 0.0, 0.3, 0], tap: tap-a1, bridge: br-a1, antenna_offset: [0, 0, 0.1]}
+  - {name: agent2, radio_ip: 10.10.0.2, mgmt_ip: 10.20.0.12, px4_instance: 1, px4_gz_model: x500_1, spawn_pose: [14.0, 0.0, 0.3, 0], tap: tap-a2, bridge: br-a2, antenna_offset: [0, 0, 0.1]}
+  - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [7.0, 0.0, 0.3, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1]}
+# Scenario: the mesh-dropout planner in excursion mode (docs/MESH_DROPOUT.md). agent3 is the only wanderer; the excursion drops exactly
+# its direct link to agent1 and keeps its link to agent2. Without batman-adv that link would be LOST; with it, traffic is relayed.
+scenario:
+  type: mesh_dropout
+  mesh_dropout:
+    mode: excursion
+    seed: 7
+    wanderers: [agent3]
+    excursion_links: [1]       # exactly one anchor link (agent1's) drops at the excursion point
+    heading_deg: 0.0           # fly east, along the line of the three agents
+    random_waypoints: 1        # one short hop near home before and after the trip
+    roam_radius_m: 2.0         # random points stay within 2 m of agent3's spawn point (every link up there)
+    dwell_s: 15.0              # hold at the excursion point: the two-hop route is visible this long
+    speed_mps: 3.0
+    margin_m: 3.0
+swarm:
+  qos:
+    peer_state:
+      reliability: best_effort
+      durability: volatile
+      depth: 10
+simulator:
+  type: gazebo
+  world: worlds/two_agent_flat.sdf
+  world_name: two_agent_flat       # must equal the <world name> and the .sdf filename
+  pose_topic: pose/info            # under /world/<world_name>/
+  gz_partition: cosim
+  px4_world_name: px4_flat    # world used by the PX4 stack (worlds/px4_flat.sdf)

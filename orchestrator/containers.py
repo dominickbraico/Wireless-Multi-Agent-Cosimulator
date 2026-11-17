@@ -15,6 +15,13 @@ Optional YAML section (all keys optional):
       ns3_mgmt_ip: 10.20.0.2          # ns3 container on the management network (default: first free address after bridge_ip)
       link_subnet_base: 10.30.0.0/16  # agent i gets the i-th /24 of this block as its private link to ns3
 
+Optional mesh routing (Docker deployment only; docs/CONTAINERS.md, "batman-adv mesh routing"):
+
+    network:
+      mesh:
+        routing: batman_adv           # the only value; omit the section for no mesh routing
+        orig_interval_ms: 1000        # batman-adv originator message interval (its default is 1000 ms)
+
 `containers.py <experiment.yaml>` prints the plan as JSON.
 """
 import ipaddress
@@ -24,6 +31,25 @@ import sys
 import yaml
 
 DEFAULT_LINK_BASE = "10.30.0.0/16"
+MESH_ROUTING = ("batman_adv",)
+
+
+def mesh(cfg):
+    """-> None (no mesh routing) or {"routing", "orig_interval_ms"}. Raises ValueError naming the key."""
+    m = (cfg.get("network") or {}).get("mesh")
+    if m is None:
+        return None
+    if not isinstance(m, dict):
+        raise ValueError("network.mesh: must be a mapping {routing, orig_interval_ms}")
+    unknown = set(m) - {"routing", "orig_interval_ms"}
+    if unknown:
+        raise ValueError(f"network.mesh: unknown keys {sorted(unknown)}")
+    if m.get("routing") not in MESH_ROUTING:
+        raise ValueError(f"network.mesh.routing: must be one of {MESH_ROUTING}, got {m.get('routing')!r}")
+    oi = m.get("orig_interval_ms", 1000)
+    if not isinstance(oi, int) or isinstance(oi, bool) or oi < 100:
+        raise ValueError(f"network.mesh.orig_interval_ms: an integer >= 100, got {oi!r}")
+    return {"routing": m["routing"], "orig_interval_ms": oi}
 
 
 def plan(cfg):
@@ -57,6 +83,9 @@ def plan(cfg):
             "ns3_link_ip": str(ln.network_address + 11),
             # locally administered unicast MAC; ns-3's source-MAC guard (wire.source_mac_guard) is built from it
             "mac": "02:c0:5d:00:%02x:%02x" % ((i + 1) >> 8, (i + 1) & 0xFF),
+            # MAC of the batman-adv interface when mesh routing is on (container_net.py): distinct from the radio MAC above,
+            # which batman-adv uses as this agent's originator address, so the two are easy to tell apart in a capture
+            "mesh_mac": "02:c0:5e:00:%02x:%02x" % ((i + 1) >> 8, (i + 1) & 0xFF),
             "mgmt_ip": a["mgmt_ip"],
             "radio_ip": a["radio_ip"],
         }

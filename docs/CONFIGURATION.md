@@ -44,6 +44,8 @@ Editing a YAML never requires rebuilding ns-3. ns-3 reads the file each time it 
 | `two_drone_two_rover_mesh_baylands.yaml` | 2 x500, 2 R1 rovers | Mesh-dropout scenario with a mixed fleet of four |
 | `plane_drone_rover_mesh_baylands.yaml` | 1 RC Cessna, 2 x500, 2 R1 rovers | Fixed-wing in the mesh-dropout scenario (work in progress, no passing run) |
 | `rover_two_agent.yaml` | 2 R1 rovers | Rover drive test |
+| `batman_line_static.yaml` | 3 (network only) | batman-adv mesh: three static agents in a line, the outer two out of range of each other |
+| `batman_transition.yaml` | 3 x500 | batman-adv mesh: one drone flies out of another's range and is relayed through the third |
 | `isaac_one_agent.yaml` | 1 Iris | Isaac Sim spike (experimental) |
 | `isaac_camera.yaml` | 1 Iris | Isaac Sim spike with a camera (experimental) |
 | `isaac_four_agent_mesh_dropout.yaml` | 4 Iris | Mesh-dropout scenario in Isaac Sim (experimental; does not hold real time) |
@@ -63,7 +65,8 @@ The range figures come from the distance sweep reported in [EXPERIMENTS.md](EXPE
 | `network.link_log_interval_s` | Interval of the pair signal log `pair_rssi.csv` in simulated seconds. Default 0.5; 0 disables it |
 | `network.pose` | Pose feed: `transport`, `listen_addr`, `port`, `rate_hz`. Omit the section to run with static positions |
 | `network.radio_subnet` | Subnet of the emulated radio, for example `10.10.0.0/24` |
-| `network.radio_firewall` | `enabled`, `allow_udp_ports` (the RTPS ports of the swarm DDS domain) |
+| `network.radio_firewall` | `enabled`, `allow_udp_ports` (the RTPS ports of the swarm DDS domain), `allow_icmp_echo` (optional, default false: admit ping on the radio) |
+| `network.mesh` | Optional, Docker deployment: `routing` (`batman_adv`), `orig_interval_ms` (default 1000). See [CONTAINERS.md](CONTAINERS.md), "Mesh routing" |
 | `network.mgmt` | Management network between the simulator and the robots: `bridge`, `subnet`, `bridge_ip` |
 | `agents` | One entry per robot. See [Agents](#agents) |
 | `swarm.qos` | QoS of the radio topics. See [Message QoS](#message-qos) |

@@ -27,6 +27,7 @@ Status: research software under active development. Interfaces and results may c
 - Two deployments: native network namespaces, or Docker Compose with one container per agent.
 - Two flight scenarios: leader-follower formation, and mesh dropout in which links drop and recover.
 - Custom controllers: run your own ROS 2 packages on every agent; the YAML lists which topics cross the radio.
+- Multi-hop mesh routing with the real Linux batman-adv in every agent; captures show each relayed frame.
 - Multirotor (PX4 x500) and ground (Aion R1) vehicles in Gazebo Harmonic.
 - Isolation checks: nothing flows between robots without ns-3, and only the swarm DDS domain crosses the radio.
 - Run-validity checks: ns-3 real-time lag and the simulator's real-time factor.
@@ -39,6 +40,7 @@ Status: research software under active development. Interfaces and results may c
 |---|---|
 | Docker | Docker with Compose |
 | Native | Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, and the packages in [docs/SETUP.md](docs/SETUP.md) |
+| batman-adv mesh routing | The `batman_adv` kernel module loaded on the host; see [docs/CONTAINERS.md](docs/CONTAINERS.md) |
 
 Pinned versions: ns-3 3.48 with one local patch, ROS 2 Jazzy, Gazebo Harmonic, Cyclone DDS, and the PX4 commit in
 `px4/Dockerfile`.
@@ -64,6 +66,13 @@ Run your own controller, starting from the template (see [docs/CUSTOM_CONTROLLER
 ```bash
 python3 orchestrator/cosim.py build --config config/experiments/custom_consensus.yaml
 tests/containers_custom_template.sh
+```
+
+Fly one drone out of another's range while batman-adv relays their traffic through a third, with live Wireshark on the
+relay (needs the `batman_adv` kernel module, see [docs/CONTAINERS.md](docs/CONTAINERS.md)):
+
+```bash
+demo/run_container_demo.sh --config config/experiments/batman_transition.yaml --wireshark agent2
 ```
 
 Run the mesh-dropout scenario:
