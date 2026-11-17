@@ -123,7 +123,7 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
         deps["simulator"] = {"condition": "service_healthy"}
     for a in cfg["agents"]:
         n, p = a["name"], plan["agents"][a["name"]]
-        ready = f"test -f /logs/{n}.px4_ready" if mode == "flight" else "ip -br addr show radio0 | grep -q UP"
+        ready = f"test -f /logs/{n}.px4_ready" if mode == "flight" else f"ip -br addr show radio0 | grep -q ' {p['radio_ip']}/'"
         agent_env = {"COSIM_AGENT": n, "COSIM_MODE": mode, "COSIM_CONFIG": "/config/experiment_run.yaml",
                      "HOST_UID": uid, "HOST_GID": gid}
         for k in ("ALT", "SIDE", "SPEED", "OFFSET"):

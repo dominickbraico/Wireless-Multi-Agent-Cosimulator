@@ -179,7 +179,8 @@ before take-off are printed as a `note` and are not part of the criterion.
   implemented.
 - The follower's link-loss behaviour is configurable (`hold` or `land`). No policy is recommended.
 - The leader-follower scenario has one leader per experiment. Followers only receive.
-- Ghost nodes have no IP stack, so the radio is single hop. Multi-hop routing is not implemented.
+- Ghost nodes have no IP stack, so ns-3 forwards nothing between agents. Multi-hop routing is available only as
+  batman-adv running in the agents (Docker deployment; [CONTAINERS.md](CONTAINERS.md), "Mesh routing").
 - The validity check sets a lower bound on the real-time factor only. A simulator that runs faster than real time is
   not detected.
 - The ground is assumed at z = 0 in the altitude conversion.

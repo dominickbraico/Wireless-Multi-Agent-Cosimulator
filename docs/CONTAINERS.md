@@ -15,8 +15,10 @@ simulator. This document also describes how to add a physics simulator, a vehicl
 - [Isaac Sim (experimental)](#isaac-sim-experimental)
 - [Vehicle types](#vehicle-types)
 - [Network technology](#network-technology)
+- [Mesh routing (batman-adv)](#mesh-routing-batman-adv)
 - [Scenarios](#scenarios)
 - [Worlds](#worlds)
+- [Troubleshooting](#troubleshooting)
 - [Results](#results)
 - [Limitations](#limitations)
 
@@ -26,6 +28,45 @@ The host needs only the Docker daemon with Compose. It needs no `sudo`, ROS 2, P
 
 Tested with Docker 29.7 and Compose 5.5 on Ubuntu 24.04. The native deployment in [SETUP.md](SETUP.md) reads the same
 experiment YAML and is unchanged.
+
+### batman-adv mesh routing
+
+Experiments with batman-adv mesh routing (see [Mesh routing](#mesh-routing-batman-adv)) need the `batman_adv` kernel
+module on the host. `cosim.py up` stops before starting such an experiment when the module is not loaded, and prints
+these commands.
+
+A container has no kernel of its own and cannot load kernel modules, so the Docker image cannot provide the module. It
+carries only the userspace tool `batctl`. Every machine that runs a mesh experiment needs these steps once.
+
+Check whether the module is loaded:
+
+```bash
+lsmod | grep batman_adv
+```
+
+If nothing is printed, install the package that contains the module. On Ubuntu it is part of `linux-modules-extra`,
+which minimal and cloud installations often omit:
+
+```bash
+sudo apt install linux-modules-extra-$(uname -r)
+```
+
+Load the module. It stays loaded until the next reboot:
+
+```bash
+sudo modprobe batman_adv
+```
+
+Optionally, load it at every boot:
+
+```bash
+echo batman_adv | sudo tee /etc/modules-load.d/batman-adv.conf
+```
+
+Tested with batman-adv 2024.0 from `linux-modules-extra-6.8.0-149-generic` on Ubuntu 24.04. A kernel update needs the
+`linux-modules-extra` package of the new kernel; repeat the install step if `modprobe` reports that the module is not
+found. Docker Desktop on macOS and Windows runs containers in its own virtual machine, whose kernel is not checked for
+batman-adv.
 
 ## Quick start
 
@@ -360,6 +401,57 @@ Notes:
 - A technology that cannot carry multicast or large frames changes how the swarm DDS domain behaves.
 - `ns3/patches/0001-wifi-mac-sync-link-address-on-SetAddress.patch` is specific to Wi-Fi devices.
 
+## Mesh routing (batman-adv)
+
+`network.mesh.routing: batman_adv` runs the Linux batman-adv kernel module in every agent, over the emulated ad hoc
+channel. Agents that are out of range of each other then reach each other through agents in between. The routing is the
+real batman-adv code, not a model; ns-3 is unchanged and only decides which frames reach which agent.
+
+```yaml
+network:
+  mesh:
+    routing: batman_adv
+    orig_interval_ms: 1000      # originator message interval; batman-adv's default
+```
+
+Interfaces in each agent:
+
+| Interface | Without mesh routing | With batman-adv |
+|---|---|---|
+| `radio0` | The interface to ns-3, with the agent's radio IP | The batman-adv interface, with the agent's radio IP; MTU 1468 |
+| `mesh0` | Not present | The interface to ns-3; carries batman-adv frames only (ethertype 0x4305) |
+
+Everything that uses `radio0` (DDS configuration, radio firewall, tests) therefore works unchanged. An extra firewall
+table, `cosim_mesh`, drops and counts any IP packet on `mesh0`.
+
+| Item | Value |
+|---|---|
+| batman-adv | Kernel module 2024.0 (host), routing algorithm B.A.T.M.A.N. IV (its default), compat version 15 |
+| Originator address | The `mesh0` MAC of each agent, `02:c0:5d:00:00:NN` (`orchestrator/containers.py`) |
+| `radio0` MAC | `02:c0:5e:00:00:NN`, distinct from the originator address |
+| MTU | `radio0` 1468: batman-adv adds up to 32 bytes, and the emulated chain carries 1500. Larger IP packets are fragmented by IP |
+| Route log | `<log dir>/mesh_routes/<agent>.csv`: each agent's next hop toward every other agent, once per second (`orchestrator/batman_routes.py`) |
+| Tools in the agent image | `batctl`, for example `batctl meshif radio0 originators` or `batctl meshif radio0 tr <MAC>` |
+
+Run the static check (network only) and the transition flight:
+
+```bash
+tests/containers_batman_static.sh
+tests/containers_batman_transition.sh
+```
+
+Run the transition flight with the Gazebo GUI, the signal map, a route window and live Wireshark on the relaying agent:
+
+```bash
+demo/run_container_demo.sh --config config/experiments/batman_transition.yaml --wireshark agent2
+```
+
+Wireshark reads the agent's `mesh0` from a pipe, so it needs no capture permissions. Its display filter, `batadv.unicast
+&& icmp`, shows the relayed pings: on the relay each ping appears twice, arriving from one neighbour and leaving to the
+other with a batman-adv TTL one lower. Compare the Ethernet source and destination columns. The captures of every run
+are also saved in `<log dir>/capture/`. The criteria and results are in [EXPERIMENTS.md](EXPERIMENTS.md), "batman-adv
+mesh".
+
 ## Scenarios
 
 The agent containers run the leader-follower flight by default. `scenario.type` in the experiment YAML selects another
@@ -419,6 +511,17 @@ demo/run_container_demo.sh --config config/experiments/five_agent_wifi_baylands.
 PX4_WORLD=baylands tests/containers_leader_follower.sh --config config/experiments/five_agent_wifi_baylands.yaml
 ```
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `cosim.py build` fails with `Temporary failure resolving` | Containers on the Docker bridge have no internet access on this host, while the host itself has | Build with the host's network: `python3 orchestrator/cosim.py build --host-network`. The experiments themselves need no internet |
+| `cosim: this experiment uses batman-adv mesh routing ...` | The `batman_adv` kernel module is not loaded on the host | See [batman-adv mesh routing](#batman-adv-mesh-routing) under Requirements |
+
+The first case was observed on the development machine on 2026-11-17: DNS queries and TCP connections from a container
+on the default bridge timed out, while a container with the host's network resolved names. The cause on the host was not
+investigated.
+
 ## Results
 
 Single runs on the development machine, `five_agent_wifi_baylands.yaml`, offline simulator container, 2026-10-21.
@@ -453,6 +556,8 @@ Wi-Fi standards: the 802.11a, 802.11g and 802.11n examples pass `tests/container
 - PX4's Gazebo models are fetched from the main branch of the `PX4-gazebo-models` repository at image build. They are
   not pinned.
 - Containers run as root and keep `NET_ADMIN`, which wiring the interfaces needs.
+- batman-adv is tested with three agents in a line, B.A.T.M.A.N. IV and the default originator interval only. Not
+  tested: more agents, more than two hops, B.A.T.M.A.N. V, the native deployment, Docker Desktop.
 - The host's Docker bridge for each link network also receives the frames on that link. The source-MAC guard keeps
   host-originated frames off the emulated channel.
 - The agents' flight DDS path uses the address of `radio0` over loopback. See [ARCHITECTURE.md](ARCHITECTURE.md). The

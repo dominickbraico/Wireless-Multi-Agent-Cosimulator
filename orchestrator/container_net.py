@@ -8,12 +8,17 @@ ns3 side, per agent:  link-<agent> interface -> Linux bridge -> TAP (opened late
                       source-MAC guard (the same rule wire.py installs).
 agent side:           the link-<agent> interface becomes `radio0` with the agent's radio IP and its planned MAC, the
                       radio firewall (default deny, swarm DDS ports only) and the management-network peer firewall.
+                      With `network.mesh.routing: batman_adv` the link interface becomes `mesh0` instead, batman-adv runs
+                      on it, and the batman-adv interface is named `radio0` and carries the radio IP. Everything that
+                      uses `radio0` (DDS configuration, radio firewall, tests) therefore works unchanged; `mesh0` carries
+                      only batman-adv frames.
 
 Interfaces are found by the address Docker assigned (containers.plan), never by name: Docker numbers them in no
 guaranteed order. Needs CAP_NET_ADMIN. Addressing comes from containers.plan(), shared with the compose generator.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 
@@ -84,20 +89,62 @@ def agent_side(cfg, name):
     prefix = cfg["network"]["radio_subnet"].split("/")[1]
     link = iface_with_ip(p["agent_link_ip"])
     mgmt = iface_with_ip(p["mgmt_ip"])
+    m = containers.mesh(cfg)
+    phy = "mesh0" if m else "radio0"                     # the interface whose frames enter ns-3
     sh(f"ip link set {link} down")
-    sh(f"ip link set {link} name radio0")
-    sh(f"ip link set radio0 address {p['mac']}")
-    sh("ip addr flush dev radio0")
-    sh(f"ip addr add {p['radio_ip']}/{prefix} dev radio0")
-    sh("ip link set radio0 mtu 1500 up")
+    sh(f"ip link set {link} name {phy}")
+    sh(f"ip link set {phy} address {p['mac']}")          # the source-MAC guard in the ns3 container expects this MAC
+    sh(f"ip addr flush dev {phy}")
+    if m:
+        mesh_up(p, prefix, m)
+    else:
+        sh(f"ip addr add {p['radio_ip']}/{prefix} dev radio0")
+        sh("ip link set radio0 mtu 1500 up")
     sh("ip link set lo up")
     sh(f"ip route add 239.255.0.0/16 dev {mgmt}", check=False)       # gz-transport multicast discovery: management side
     rules = wire.radio_firewall_ruleset(cfg)
     if rules:
         nft(rules, "radio firewall")
+    if m:                                                # whether or not the radio firewall is on: mesh0 must never carry IP
+        nft(MESH_PHY_RULESET, "mesh interface firewall")
     nft(mgmt_isolation_ruleset(plan, p["mgmt_ip"]), "management isolation")
     print(f"container_net[{name}]: radio0 {p['radio_ip']}/{prefix} mac {p['mac']}; mgmt on {mgmt} {p['mgmt_ip']}; "
-          f"radio firewall {'on' if rules else 'off'}; mgmt peers blocked", flush=True)
+          f"radio firewall {'on' if rules else 'off'}; mgmt peers blocked"
+          + (f"; batman-adv on mesh0, originator interval {m['orig_interval_ms']} ms" if m else ""), flush=True)
+
+
+# mesh0 carries batman-adv frames only (ethertype 0x4305, not IP, so an inet table never sees them). Any IP packet on it would
+# bypass radio0's firewall, so it is dropped and counted.
+MESH_PHY_RULESET = """table inet cosim_mesh {
+  chain out {
+    type filter hook output priority 0; policy accept;
+    oifname "mesh0" counter name ip_on_mesh0_out drop
+  }
+  chain in {
+    type filter hook input priority 0; policy accept;
+    iifname "mesh0" counter name ip_on_mesh0_in drop
+  }
+  counter ip_on_mesh0_out { }
+  counter ip_on_mesh0_in { }
+}
+"""
+
+
+def mesh_up(p, prefix, m):
+    """batman-adv (the host's kernel module; containers cannot load it) on mesh0, with its interface named radio0.
+    MTU: batman-adv adds up to 32 bytes per frame (unicast_4addr header plus the inner Ethernet header). The emulated chain
+    is 1500 bytes end to end (Docker link network, ns-3 Wi-Fi device), so the IP interface gets 1500 - 32 = 1468 and no
+    batman-adv fragmentation is needed; larger IP packets are fragmented by IP."""
+    if not os.path.isdir("/sys/module/batman_adv"):
+        sys.exit("container_net: the batman_adv kernel module is not loaded on the host (docs/CONTAINERS.md, 'batman-adv mesh routing')")
+    sh("ip link set mesh0 mtu 1500 up")
+    sh("ip link add radio0 type batadv")
+    sh("ip link set mesh0 master radio0")
+    sh(f"ip link set radio0 address {p['mesh_mac']}")
+    sh("sysctl -qw net.ipv6.conf.radio0.disable_ipv6=1", check=False)      # no IPv6 on the emulated chain
+    sh(f"ip addr add {p['radio_ip']}/{prefix} dev radio0")
+    sh("ip link set radio0 mtu 1468 up")
+    sh(f"batctl meshif radio0 orig_interval {m['orig_interval_ms']}")
 
 
 def main():

@@ -10,6 +10,7 @@ configuration and command. All results are single runs on one machine unless sta
 - [Leader-follower flight](#leader-follower-flight)
 - [Rover drive test](#rover-drive-test)
 - [Custom controller](#custom-controller)
+- [batman-adv mesh](#batman-adv-mesh)
 - [Isaac Sim stages](#isaac-sim-stages)
 - [Demo with the Gazebo GUI](#demo-with-the-gazebo-gui)
 - [Reference results](#reference-results)
@@ -58,6 +59,8 @@ tests/containers_static_link.sh
 | `tests/containers_mesh_dropout.sh` | Docker | The mesh-dropout flight; criteria in [MESH_DROPOUT.md](MESH_DROPOUT.md) |
 | `tests/custom_relay.sh` | Loopback | The radio relay, YAML validation of the custom scenario, the radio analyzer, the template controller |
 | `tests/containers_custom_template.sh` | Docker | The custom scenario with the template controller |
+| `tests/containers_batman_static.sh` | Docker | batman-adv relays between two agents out of range of each other (network only) |
+| `tests/containers_batman_transition.sh` | Docker | batman-adv reroutes while a drone flies out of range and back |
 | `tests/px4_mavlink_link.sh` and four more | Docker | Isaac Sim stages A to F, below |
 
 - `tests/static_link.sh` also checks the ns-3 lag and that the pcap holds 802.11 frames.
@@ -233,6 +236,82 @@ real-time-factor window of 0.992.
 The relay latency figures cover relay to relay: the loopback hops between the controller nodes and the relays are not
 included. The agents are 5.8 m to 10 m apart, far inside the range, so the run does not test delivery near the range
 edge.
+
+## batman-adv mesh
+
+batman-adv runs in every agent over the emulated channel ([CONTAINERS.md](CONTAINERS.md), "Mesh routing"). Both tests
+need the `batman_adv` kernel module on the host. The criteria were fixed on 2026-11-17 before the first scripted run;
+the changes are listed below.
+
+### Static line
+
+`config/experiments/batman_line_static.yaml`: three agents at x = 0 m, 15 m and 30 m, 5 m up, transmit power 4 dBm
+(range to the receiver floor about 20.5 m). The outer agents cannot hear each other. Network only:
+
+```bash
+tests/containers_batman_static.sh
+```
+
+| Check | Criterion |
+|---|---|
+| S1 | The same layout without batman-adv: agent1 -> agent3 answers 0 of 20 pings |
+| S2 | With batman-adv: agent1 -> agent3 answers at least 19 of 20 pings |
+| S3 | `batctl tr` from agent1 to agent3 lists agent2, then agent3 |
+| S4 | agent2's `mesh0` capture holds the pings arriving from agent1 and leaving to agent3, and the replies back, with a batman-adv TTL one lower when leaving |
+| S5 | Every frame an agent sends on `mesh0` is a batman-adv frame; the `mesh0` IP firewall counters are 0 |
+| S6 | 10 pings of 3000 bytes agent1 -> agent3, at least 9 answered |
+| S7 | Within 30 s of batman-adv starting, every ordered pair answers at least 4 of 5 pings |
+
+### Transition flight
+
+`config/experiments/batman_transition.yaml`: three x500 on `px4_flat`, agent1 at x = 0 m and agent2 at x = 14 m hover;
+agent3 starts at x = 7 m and flies east to x = 27 m (27.7 m from agent1, beyond range; 13.3 m from agent2, in range),
+holds 15 s and returns. Transmit power 4 dBm; mesh-dropout planner in excursion mode, seed 7. agent1 pings agent3 at 5
+Hz throughout; the radio firewall admits ICMP echo for this (`allow_icmp_echo`):
+
+```bash
+tests/containers_batman_transition.sh
+```
+
+`tools/analyze_batman.py` applies the criteria:
+
+| Check | Criterion |
+|---|---|
+| T1 | agent1's next hop toward agent3 is agent3 before the modelled drop of their link, agent2 during it for at least 5 s, agent3 after recovery |
+| T2 | Ping agent1 -> agent3: at least 90 % answered; total outage at most 10 s |
+| T3 | Heartbeats: the longest LOST-to-UP interval between agent1 and agent3 is at most 10 s |
+| T4 | ns-3 lag and real-time factor as in the other scenarios; no local-domain RTPS, XRCE or PX4 topic names on `radio0`; domain-42 RTPS present; only batman-adv frames sent on `mesh0` |
+| T5 | agent2's `mesh0` capture holds agent1's pings to agent3 and the replies, at least 20 frames in each of the four directions |
+
+Definitions: the modelled drop is where ns-3's `pair_rssi.csv` has agent1-agent3 below the receiver floor, mapped to
+wall time with `pose_applied.csv`. The ping outage is the sum of (gap - 0.2 s) over consecutive replies more than 0.5 s
+apart.
+
+| Date | Criterion change | Reason |
+|---|---|---|
+| 2026-11-17 | S5 restated: the agents' frames on `mesh0`, instead of PX4 and DDS isolation | The static test is network only, so there is no PX4 or DDS traffic; T4 checks that isolation |
+| 2026-11-17 | S6, S7 and T5 added | Before their first runs |
+| 2026-11-17 | S5 and T4 count only frames whose source is the agent's own `mesh0` MAC | Transition run 1: the captures also held frames arriving from the host's Docker bridge, which never enter ns-3. The criterion always said "frames the agents send"; the measurement now matches it |
+
+### Results
+
+Single runs on the development machine (16 cores, 31 GB), Docker, batman-adv 2024.0 on Linux 6.8.0-149, 2026-11-17:
+
+| Run | Outcome | Measurements |
+|---|---|---|
+| Static, run 1 | S5 FAIL, others PASS | The `mesh0` firewall was installed only with the radio firewall, which network-only runs leave off. Fixed: it is installed whenever batman-adv runs |
+| Static, run 2 | All 7 PASS | S2: 20 of 20, round trip 1.1 ms to 3.1 ms. S4: 20 frames in each direction, TTL 50 arriving, 49 leaving. S6: 10 of 10. S7: neighbours answered after 0.1 s to 2.8 s, agent1 and agent3 after 27.6 s and 27.7 s |
+| Transition, run 1 | T1, T3 and validity PASS; T2, T4 (`mesh0`) and T5 FAIL | The radio firewall dropped ICMP: 0 of 411 pings. The `mesh0` count included 85 frames from the host's Docker bridge. Fixed by `allow_icmp_echo` and the measurement change above |
+| Transition, run 2 | All 9 PASS | Route via agent2 from 27 s to 44 s after take-off; modelled drop 20.5 s. Ping 397 of 420 (94.5 %), outage 4.8 s. Longest heartbeat loss 3.7 s. agent2 relayed 83 to 84 frames each way. ns-3 lag at most 0.4 ms; worst real-time-factor window 0.999 |
+| Transition, `demo/run_container_demo.sh --no-gui --no-map --no-prompt` | All 9 PASS | Route via agent2 from 28 s to 43 s. Ping 392 of 421 (93.1 %), outage 6.0 s. Longest heartbeat loss 4.6 s. agent2 relayed 81 to 82 frames each way |
+
+Observations, not tested explanations:
+
+- A two-hop route took about 28 s to form after batman-adv started (S7), against 0.1 s to 2.8 s for neighbours. It is
+  consistent with batman-adv IV building up its route quality from originator messages, one per second at the default
+  interval.
+- At each switch from direct to relayed, the pings stopped for 4.8 s to 6.2 s, while batman-adv waited for the direct
+  route's quality to decay. A shorter `orig_interval_ms` should shorten this; it was not tested.
 
 ## Isaac Sim stages
 

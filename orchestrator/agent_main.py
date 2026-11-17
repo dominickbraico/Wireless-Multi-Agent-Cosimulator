@@ -25,6 +25,7 @@ import fleet
 import simulators
 import supervise
 import camera_sink
+import containers
 import vehicles
 from supervise import file_contains, spawn, wait_for
 
@@ -39,6 +40,10 @@ def main():
     name = os.environ["COSIM_AGENT"]
     mode = os.environ.get("COSIM_MODE", "flight")
     supervise.install_handlers()
+    if containers.mesh(cfg):                         # batman-adv route log, once per second (orchestrator/batman_routes.py)
+        os.makedirs(f"{LOGS}/mesh_routes", exist_ok=True)
+        spawn(["python3", "/opt/cosim/orchestrator/batman_routes.py", "--config", os.environ.get("COSIM_CONFIG", "/config/experiment_run.yaml"),
+               "--name", name, "--csv", f"{LOGS}/mesh_routes/{name}.csv"], f"{LOGS}/batman_routes_{name}.log", label="batman_routes")
     if mode == "net":
         print(f"agent_main[{name}]: network-only mode, idling", flush=True)
         while True:

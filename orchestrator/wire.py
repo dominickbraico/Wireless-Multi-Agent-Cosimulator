@@ -105,16 +105,20 @@ def radio_firewall_ruleset(cfg):
     if not fw.get("enabled"):
         return None
     lo, hi = fw["allow_udp_ports"]
+    # allow_icmp_echo (optional, default false): ping across the radio, for demonstrations and diagnostics. Echo request and
+    # reply only; every other ICMP type, and all non-DDS traffic, stays blocked.
+    icmp_out = '    oifname "radio0" icmp type { echo-request, echo-reply } accept\n' if fw.get("allow_icmp_echo") else ""
+    icmp_in = '    iifname "radio0" icmp type { echo-request, echo-reply } accept\n' if fw.get("allow_icmp_echo") else ""
     return f"""table inet cosim_radio {{
   chain out {{
     type filter hook output priority 0; policy accept;
-    oifname "radio0" udp dport {lo}-{hi} accept
+{icmp_out}    oifname "radio0" udp dport {lo}-{hi} accept
     oifname "radio0" udp dport 7400-7650 counter name leak_domain0_out drop
     oifname "radio0" counter name leak_other_out drop
   }}
   chain in {{
     type filter hook input priority 0; policy accept;
-    iifname "radio0" udp dport {lo}-{hi} accept
+{icmp_in}    iifname "radio0" udp dport {lo}-{hi} accept
     iifname "radio0" counter name blocked_in drop
   }}
   counter leak_domain0_out {{ }}
