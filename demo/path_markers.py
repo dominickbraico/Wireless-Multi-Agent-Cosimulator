@@ -112,7 +112,7 @@ def main():
         for name, w in fliers.items():
             sp = pl["spawn"][name]
             z = sp[2] + pl["altitude_m"][name]
-            paths[name] = [(x, y, z) for x, y in w["waypoints_enu"]]
+            paths[name] = [(x, y, z) for x, y in w.get("waypoints_enu", [])]      # a fixed-wing agent has circles, not waypoints: nothing is drawn for it
     for name, pts in paths.items():
         for i, (p, q) in enumerate(zip(pts, pts[1:])):
             r = _leg(f"path_{name}", i, p, q, colours[name])

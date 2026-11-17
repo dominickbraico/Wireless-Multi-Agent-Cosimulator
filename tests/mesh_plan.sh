@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Offline checks of the mesh-dropout flight plans (orchestrator/mesh_plan.py). No Docker, no ROS, no simulator: seconds.
-#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands and drone_rover_mesh_baylands YAMLs too)
+#   tests/mesh_plan.sh [--config YAML]      (default: four_agent_mesh_dropout.yaml; run it for the Baylands, drone_rover_mesh_baylands and two_drone_two_rover_mesh_baylands YAMLs too)
 # Both modes, 40 seeds each.
 #   roam      (every agent flies): plans are repeatable and differ between seeds; the flight is re-simulated here from the plan file alone (independently of the
 #             planner): never more than max_dropped_links links at risk at once, at least min_drop_events clear drops, every path starts and ends at its spawn,
 #             lasts at least min_flight_s at the agent's speed (speed_mps, or rover_speed_mps for a rover), stays inside the allowed area (arena and heading sectors; a rover:
-#             rover_arena_radius_m around its own spawn point), and the drones' altitudes differ (a rover's is 0)
+#             rover_arena_radius_m around its own spawn point), and the drones' altitudes differ (a rover's is 0). A fixed-wing agent (rc_cessna) has two circles instead of
+#             a path: its links are re-simulated with the nearest and farthest point of its circle (drop / at risk), and its far circle must be where the plan says
 #   excursion (one wanderer): the excursion drops exactly the planned number of anchor links with the planned margin, random points keep all links up, the path
 #             ends at the spawn point, headings stay in the allowed sectors
 # plus: bad YAML values are rejected.
@@ -50,19 +51,30 @@ for seed in range(40):
     kind, spd = pl.get("kind", {}), pl.get("speed_mps", {})                       # per-agent vehicle kind and speed (rovers: rover_speed_mps)
     # independent re-simulation from the plan file's waypoints and times
     pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
+    plane = next((n for n in names if kind.get(n) == "fixedwing"), None)
+    def plane_centre(t):                                    # the circle's centre: near, straight transit at the plan's speed, far, straight back (independent of the planner's code)
+        a = pl["agents"][plane]; nr, fr = a["near_enu"], a["far_enu"]; tr = math.dist(nr, fr) / spd[plane]
+        f = 0.0 if t <= a["t_out_s"] else min(1.0, (t - a["t_out_s"]) / tr) if t <= a["t_back_s"] else max(0.0, 1.0 - (t - a["t_back_s"]) / tr)
+        return [nr[0] + f * (fr[0] - nr[0]), nr[1] + f * (fr[1] - nr[1])]
+    def dist2(a, b, xy, t):                                 # (nearest, farthest) possible distance
+        za, zb = pl["spawn"][a][2] + pl["altitude_m"][a], pl["spawn"][b][2] + pl["altitude_m"][b]
+        if plane not in (a, b):
+            d = math.dist((*xy[a], za), (*xy[b], zb)); return d, d
+        o = b if a == plane else a; h = math.dist(plane_centre(t - lag), xy[o]); R = pl["agents"][plane]["radius_m"]
+        return math.hypot(max(h - R, 0.0), za - zb), math.hypot(h + R, za - zb)
     run = {pq: None for pq in pairs}; clear = 0; max_risk = 0; t = 0.0
     iso = {n: None for n in names}; iso_best = 0.0
     while t <= pl["t_total_s"] + 1e-9:
-        xy = {n: pos(pl, n, t - lag) for n in names}; risk = 0
+        xy = {n: pos(pl, n, t - lag) for n in names if n != plane}; risk = 0
         for a, b in pairs:
-            d = math.dist((*xy[a], pl["spawn"][a][2] + pl["altitude_m"][a]), (*xy[b], pl["spawn"][b][2] + pl["altitude_m"][b]))
-            risk += d > D - m
+            d, d_hi = dist2(a, b, xy, t)
+            risk += d_hi > D - m
             if d > D + m:
                 run[(a, b)] = run[(a, b)] if run[(a, b)] is not None else t
             elif run[(a, b)] is not None:
                 clear += (t - run[(a, b)]) >= st["min_drop_s"]; run[(a, b)] = None
         for n in names:                                     # n beyond D + margin from every other agent
-            if all(math.dist((*xy[n], pl["spawn"][n][2] + pl["altitude_m"][n]), (*xy[o], pl["spawn"][o][2] + pl["altitude_m"][o])) > D + m for o in names if o != n):
+            if all(dist2(n, o, xy, t)[0] > D + m for o in names if o != n):
                 iso[n] = iso[n] if iso[n] is not None else t; iso_best = max(iso_best, t - iso[n])
             else:
                 iso[n] = None
@@ -81,6 +93,12 @@ for seed in range(40):
         th = math.degrees(math.atan2(q[1] - c[1], q[0] - c[0])) % 360
         return any((th - lo) % 360 <= ((hi - lo) % 360 or 360) for lo, hi in arcs)
     for n in names:
+        if n == plane:                                      # two circles, no path: the far circle is where the plan says, and the plan ends after the plane is back
+            a = pl["agents"][n]
+            if abs(math.dist(a["near_enu"], a["far_enu"]) - a["far_distance_m"]) > 0.1: bad.append((seed, n, "far circle not at far_distance_m"))
+            if a["t_back_s"] - a["t_out_s"] < a["far_distance_m"] / spd[n] + st.get("min_isolation_s", 0): bad.append((seed, n, "too short at the far circle"))
+            if pl["t_total_s"] < a["t_end_s"] + st["end_hold_s"] - 1e-6: bad.append((seed, n, "end time before the plane is back"))
+            continue
         a = pl["agents"][n]; ws, ts = a["waypoints_enu"], a["times_s"]
         sp = [round(pl["spawn"][n][0], 2), round(pl["spawn"][n][1], 2)]
         if ws[0] != sp or ws[-1] != sp: bad.append((seed, n, "does not start and end at its spawn"))
@@ -100,7 +118,7 @@ for seed in range(40):
             far = max(math.dist(w, c) for w in ws)
             if abs(far - r_out) > 0.05: bad.append((seed, n, "excursion point not at D + margin + excursion_extra_m", far, r_out))
             if max(ts[i + 1] - ts[i] for i in range(len(ts) - 1)) < st["min_isolation_s"]: bad.append((seed, n, "hold shorter than min_isolation_s"))
-    flyers = [n for n in names if kind.get(n) != "rover"]
+    flyers = [n for n in names if kind.get(n) not in ("rover", "fixedwing")]
     if len({pl["altitude_m"][n] for n in flyers}) != len(flyers): bad.append((seed, "altitudes not distinct"))
     if any(pl["altitude_m"][n] != 0 for n in names if kind.get(n) == "rover"): bad.append((seed, "a rover has an altitude"))
     if kind.get(xa) == "rover": bad.append((seed, "the excursion agent is a rover"))
@@ -108,11 +126,19 @@ check("re-simulated: at most max_dropped_links links at risk at once, at least m
 check("planner needs few candidates", max(attempts) < 5000, f"max {max(attempts)} candidate plans over 40 seeds, median {sorted(attempts)[20]}; clear drops per plan {min(nev)}..{max(nev)}")
 
 # ------------------------------------------------------------------ mixed fleets
-if any(a.get("vehicle") == "r1_rover" for a in base["agents"]):
-    print("-- mixed fleet: mode excursion is not available with rovers, so its checks are skipped; the rejections are checked instead")
-    rover = [a["name"] for a in base["agents"] if a.get("vehicle") == "r1_rover"][0]
-    for kw, label in (({"mode": "excursion"}, "mode excursion with a rover"), ({"excursion_agent": rover}, "a rover as the excursion agent"),
-                      ({"rover_speed_mps": -1}, "negative rover speed"), ({"rover_arena_radius_m": 0.5, "max_attempts": 50}, "a rover arena too small for min_flight_s")):
+import vehicles
+other = {vehicles.kind(a): a["name"] for a in base["agents"] if vehicles.kind(a) != "multirotor"}       # one rover and / or the fixed-wing agent, if the fleet has them
+if other:
+    print("-- mixed fleet: mode excursion is not available with rovers or a fixed-wing, so its checks are skipped; the rejections are checked instead")
+    cases = [({"mode": "excursion"}, "mode excursion with a rover or fixed-wing")]
+    if "rover" in other:
+        cases += [({"excursion_agent": other["rover"]}, "a rover as the excursion agent"), ({"rover_speed_mps": -1}, "negative rover speed"),
+                  ({"rover_arena_radius_m": 0.5, "max_attempts": 50}, "a rover arena too small for min_flight_s")]
+    if "fixedwing" in other:
+        drone = next(a["name"] for a in base["agents"] if vehicles.kind(a) == "multirotor")
+        cases += [({"excursion_agent": drone}, "an excursion_agent together with a fixed-wing"), ({"plane_altitude_m": 2000.0}, "a near circle out of radio range"),
+                  ({"plane_speed_mps": 0}, "zero plane speed")]
+    for kw, label in cases:
         try:
             mesh_plan.plan(variant(**{"mode": "roam", **kw})); check(f"rejects {label}", False, "no error")
         except ValueError:

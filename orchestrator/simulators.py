@@ -40,6 +40,7 @@ def _gazebo_px4_env(cfg, agent, world):
     p = container_plan(cfg)
     v = vehicles.for_simulator(agent, "gazebo")         # airframe and model of this agent's vehicle type (default x500)
     return {
+        **{f"PX4_PARAM_{k}": str(val) for k, val in v.get("px4_params", {}).items()},      # per-vehicle PX4 parameter overrides (orchestrator/vehicles.py)
         "PX4_GZ_STANDALONE": "1",                       # PX4 attaches to a running Gazebo instead of starting its own
         "PX4_SYS_AUTOSTART": v["autostart"],
         "PX4_SIM_MODEL": v["sim_model"],
@@ -62,6 +63,7 @@ def _gazebo_processes(cfg, world, config_path, log_dir):
 # ---- Isaac Sim (spike, experimental): Isaac Sim 5.1.0 + Pegasus Simulator v5.1.0 in one GPU container; each agent's PX4 connects to it over the
 # simulator MAVLink interface (TCP 4560 + px4_instance on the management network). Pegasus supports multirotors only. docs/CONTAINERS.md, "Isaac Sim".
 ISAAC_EULA_VAR = "COSIM_ACCEPT_ISAAC_EULA"
+ISAAC_GUI_VAR = "COSIM_ISAAC_GUI"                        # "1": Isaac Sim opens its window on the host's X11 display (demo only; rendering lowers the real-time factor)
 
 
 def _docker_runtimes():
@@ -85,8 +87,19 @@ def _isaac_service(cfg, world):
     if os.environ.get(ISAAC_EULA_VAR) != "Y":
         raise SystemExit(f"simulator.type isaac runs NVIDIA Isaac Sim, which needs you to accept the NVIDIA Omniverse licence agreement. "
                          f"Read it, then set {ISAAC_EULA_VAR}=Y in the environment of this command. It is not set for you.")
+    env = {"ACCEPT_EULA": "Y", "PRIVACY_CONSENT": os.environ.get("COSIM_ISAAC_PRIVACY_CONSENT", "N"), "COSIM_WORLD": world}
+    volumes = []
+    if os.environ.get(ISAAC_GUI_VAR) == "1":
+        # Isaac Sim's own window on the host's X11 display (demo/run_container_demo.sh sets these). The X11 socket is a Unix socket, so the simulator's
+        # network stays internal. COSIM_ISAAC_XAUTH is an Xauthority file whose cookie has the wildcard family, because the container's hostname is not the host's.
+        display, xauth = os.environ.get("DISPLAY"), os.environ.get("COSIM_ISAAC_XAUTH")
+        if not display or not xauth or not os.path.isfile(xauth):
+            raise SystemExit(f"{ISAAC_GUI_VAR}=1 needs DISPLAY (an X11 session) and COSIM_ISAAC_XAUTH (an Xauthority file); demo/run_container_demo.sh prepares both.")
+        env.update({ISAAC_GUI_VAR: "1", "DISPLAY": display, "XAUTHORITY": "/tmp/cosim.xauth"})
+        volumes = ["/tmp/.X11-unix:/tmp/.X11-unix:ro", f"{os.path.abspath(xauth)}:/tmp/cosim.xauth:ro"]
     return {
-        "environment": {"ACCEPT_EULA": "Y", "PRIVACY_CONSENT": os.environ.get("COSIM_ISAAC_PRIVACY_CONSENT", "N"), "COSIM_WORLD": world},
+        "environment": env,
+        "volumes": volumes,
         "cap_add": [],
         "gpu": True,
         "healthcheck_cmd": "test -f /logs/.isaac_ready",

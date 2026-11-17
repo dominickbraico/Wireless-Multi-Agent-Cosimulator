@@ -20,5 +20,6 @@ setup(
         'mesh_node = mesh_control.mesh_node:main',
         'mesh_flight = mesh_control.mesh_flight:main',
         'mesh_drive = mesh_control.mesh_drive:main',
+        'mesh_plane = mesh_control.mesh_plane:main',
     ]},
 )
