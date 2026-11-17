@@ -72,14 +72,35 @@ def main():
         for a rover, so a rover is asked directly: `commander check` answers "Preflight check: OK" when every arming check passes."""
         if vehicles.kind(agent) == "multirotor":
             return file_contains(px4_log, "Ready for takeoff")
-        try:
-            r = subprocess.run([f"{PX4_BUILD}/bin/px4-commander", "--instance", str(inst), "check"], cwd=wd, env=penv, capture_output=True, text=True, timeout=10)
-        except subprocess.TimeoutExpired:
+        def px4(tool, *args):
+            try:
+                r = subprocess.run([f"{PX4_BUILD}/bin/px4-{tool}", "--instance", str(inst), *args], cwd=wd, env=penv, capture_output=True, text=True, timeout=10)
+            except subprocess.TimeoutExpired:
+                return ""
+            return r.stdout + r.stderr
+        if "Preflight check: OK" not in px4("commander", "check"):
             return False
-        return "Preflight check: OK" in r.stdout + r.stderr
+        if vehicles.kind(agent) != "fixedwing":
+            return True
+        # A fixed-wing is ready only when PX4's altitude controller (TECS) has brought its internal altitude reference to the vehicle's altitude. At the pinned PX4
+        # commit that reference starts near 0 m above mean sea level about 10 s after boot and approaches the true altitude (488 m in PX4's worlds) at
+        # FW_T_CLMB_R_SP = 3 m/s, so it needs about 175 s. Taking off earlier ends in a descent into the ground at the maximum sink rate once the take-off
+        # climb hands over to TECS (observed 2026-11-10, three flights; dev_docs notes). 2 m is far below that error and above the estimator's noise.
+        def field(text, key):
+            for line in text.splitlines():
+                p = line.split()
+                if len(p) == 2 and p[0] == key + ":":
+                    try:
+                        return float(p[1])
+                    except ValueError:
+                        return None
+            return None
+        ref, alt = field(px4("listener", "tecs_status", "1"), "altitude_reference"), field(px4("listener", "vehicle_global_position", "1"), "alt")
+        return ref is not None and alt is not None and abs(ref - alt) < 2.0
 
-    if not wait_for(lambda: px4_ready() or supervise.died(), 240, period=1.0):
-        print(f"agent_main[{name}]: PX4 not ready within 240 s", flush=True)
+    ready_s = 420 if vehicles.kind(agent) == "fixedwing" else 240       # a fixed-wing waits about 175 s for PX4's altitude reference (px4_ready)
+    if not wait_for(lambda: px4_ready() or supervise.died(), ready_s, period=1.0):
+        print(f"agent_main[{name}]: PX4 not ready within {ready_s} s", flush=True)
         supervise.stop_all()
     if supervise.died():
         print(f"agent_main[{name}]: process exited before PX4 was ready: {supervise.died()}", flush=True)

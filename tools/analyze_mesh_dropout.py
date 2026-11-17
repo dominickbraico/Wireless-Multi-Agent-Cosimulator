@@ -8,6 +8,9 @@ mesh/mesh_events_<agent>.csv (UP / LOST per neighbour, from each agent's own hea
 
 Two modes of the scenario (plan["mode"]): `excursion` (one wanderer, the rest hover) is checked against the planned dropped pairs; `roam` (every agent flies) is
 checked against the modelled drops themselves, because which links drop depends on where both ends are at that moment. Pass criteria, fixed before the first run:
+  fixed-wing (an agent of kind fixedwing; criteria fixed on 2026-11-10 before its first scenario run) took off and reached its near circle; reached its far circle and
+             came back to the near one; finished its plan in the air (never disarmed); within 15 m of its planned altitude at the last pose. It does not land, so
+             the return-to-spawn checks below do not apply to it. Its links are judged by the roam-mode rules like any other agent's.
   flights    every agent reached its altitude, landed and disarmed; was within 2.0 m (horizontal) of its spawn point when its landing began; ended within 5.0 m of it
              after touchdown (changed 2026-10-21: the end position used to be held to 2.0 m, but on Baylands' sloping ground a vehicle can be bumped about 1 to 2 m after touchdown)
   modelled   the links to the planned dropped anchors fall below the receiver floor and later recover; every other link (to the kept
@@ -97,9 +100,15 @@ else:
 # ---- flights ----
 kind = plan.get("kind", {})                                     # older plans have no vehicle kinds: all multirotors
 is_rover = lambda n: kind.get(n) == "rover"
+is_plane = lambda n: kind.get(n) == "fixedwing"
+PLANE_END_ALT_TOL_M = 15.0                                      # a fixed-wing must still be within this of its planned altitude at the last pose (it does not land)
 for n in names:
     t = text(f"{log}/{n}_flight.log")
-    if is_rover(n):                                             # a ground vehicle: armed in offboard mode, drives, disarms (mesh_control.mesh_drive)
+    if is_plane(n):                                             # a fixed-wing: PX4 take-off, near circle, far circle, back; it keeps circling (mesh_control.mesh_plane)
+        check(f"{n} (fixed-wing) took off and reached its near circle", "On the near circle" in t)
+        check(f"{n} (fixed-wing) reached its far circle and came back to the near one", "On the far circle" in t and "Back on the near circle" in t)
+        check(f"{n} (fixed-wing) finished its plan in the air", "Plan complete" in t and "Disarmed in flight" not in t)
+    elif is_rover(n):                                           # a ground vehicle: armed in offboard mode, drives, disarms (mesh_control.mesh_drive)
         check(f"{n} (rover) armed in offboard mode", "Armed in offboard mode" in t)
         check(f"{n} (rover) completed its route and disarmed", "Route complete and disarmed" in t)
     else:
@@ -130,6 +139,12 @@ def landing_started(n):
 
 for n in names:
     sp = plan["spawn"][n]
+    if is_plane(n):                                             # no landing, so no return-to-spawn check: it must still be at its altitude when the run ends
+        up = (T[n][-1, 4] - sp[2]) if n in T else None
+        want = plan["agents"][n]["altitude_m"]
+        check(f"{n} (fixed-wing) was within {PLANE_END_ALT_TOL_M:g} m of its planned altitude at the last pose", up is not None and abs(up - want) <= PLANE_END_ALT_TOL_M,
+              f"{up:.1f} m above its spawn point, planned {want:g} m" if up is not None else "no poses")
+        continue
     if n not in T:
         check(f"{n} was back within {HOME_TOL_M:g} m of its spawn point when landing began", False, "no poses")
         continue

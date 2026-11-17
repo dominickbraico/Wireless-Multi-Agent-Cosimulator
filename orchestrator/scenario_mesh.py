@@ -4,7 +4,7 @@
 Selected by `scenario.type: mesh_dropout` in the experiment YAML; the leader-follower flight is the default and is not touched by this file.
 Every agent runs a mesh node (all-to-all heartbeat on the radio, logs which neighbours it hears). Then, once /logs/go exists:
   mode roam (default): every agent runs mesh_flight role=roam (a rover, agents[].vehicle r1_rover, runs mesh_drive instead: it drives the same kind of plan on the ground and
-    touches <agent>.airborne once it is armed and ready). After take-off each touches /logs/<agent>.airborne; when all have, the first agent's supervisor
+    touches <agent>.airborne once it is armed and ready; a fixed-wing, e.g. rc_cessna, runs mesh_plane: it takes off, circles, and touches it once on its near circle). After take-off each touches /logs/<agent>.airborne; when all have, the first agent's supervisor
     touches /logs/mesh_start and every agent flies its own seeded random path on that shared timeline, then lands at its spawn point at the planned end time.
   mode excursion:
     wanderer  mesh_flight role=wander: the seeded random flight of orchestrator/mesh_plan.py, ending at its spawn point and landing
@@ -52,7 +52,11 @@ def run(cfg, agent, name, inst, spawn_xy, logs, dds_dir):
     lenv = dict(os.environ, ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST", ROS_DOMAIN_ID="0")
     flight_log = f"{logs}/{name}_flight.log"
     rover = vehicles.kind(agent) == "rover"              # a ground vehicle follows its planned path with mesh_drive (roam mode only; mesh_plan.settings enforces it)
-    if rover:
+    plane = vehicles.kind(agent) == "fixedwing"          # a fixed-wing circles and uses PX4's own modes (mesh_control/mesh_plane.py; roam mode only, enforced by mesh_plan.settings)
+    if plane:
+        fargs = ["ros2", "run", "mesh_control", "mesh_plane", "--ros-args", "-p", f"px4_instance:={inst}", "-p", f"spawn_xy:=[{sx},{sy}]",
+                 "-p", f"agent_name:={name}", "-p", f"plan_file:={logs}/mesh_plan.json"]
+    elif rover:
         fargs = ["ros2", "run", "mesh_control", "mesh_drive", "--ros-args", "-p", f"px4_instance:={inst}", "-p", f"spawn_xy:=[{sx},{sy}]",
                  "-p", f"agent_name:={name}", "-p", f"plan_file:={logs}/mesh_plan.json", "-p", f"log_csv:={logs}/rover/rover_{name}.csv"]
     else:
@@ -76,7 +80,8 @@ def run(cfg, agent, name, inst, spawn_xy, logs, dds_dir):
         else:
             print(f"agent_main[{name}]: not every agent reached its altitude within 600 s; no start signal", flush=True)
 
-    landed = lambda: file_contains(flight_log, "Route complete and disarmed" if rover else "Landed and disarmed")
+    # a fixed-wing does not land: it is finished when its node reports the plan complete (it keeps circling until the stack is stopped)
+    landed = lambda: file_contains(flight_log, "Plan complete" if plane else "Route complete and disarmed" if rover else "Landed and disarmed")
     if not roam and not wanderer:
         # land once every wanderer is down: the supervisors share /logs, so <wanderer>.done is the signal
         wait_for(lambda: all(os.path.exists(f"{logs}/{w}.done") for w in wanderers), 900)

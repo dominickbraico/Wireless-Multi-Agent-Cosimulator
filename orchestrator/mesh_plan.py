@@ -21,6 +21,13 @@ altitudes (agent i flies at altitude_base_m + i * altitude_step_m above its armi
 waypoints (and the straight legs between them) beyond `roam_radius_m + 3` m of the centre must lie in these polar arcs (ENU degrees, 0 = east, 90 = north); in excursion mode the
 excursion heading is drawn from them.
 
+A fixed-wing agent (`agents[].vehicle` of kind fixedwing, e.g. rc_cessna; mode roam, at most one) cannot follow waypoints or hover, so it is planned differently: it circles a NEAR
+circle over the other agents (radius `loiter_radius_m` of its vehicle type, `plane_altitude_m` up), at `plane_out_after_s` it flies to a FAR circle and circles there, then it flies back.
+The far circle's centre is placed so that every point of it is beyond D + margin_m of everywhere the other agents may be; the near circle is rejected unless every point of it is within
+D - margin_m of them. Where the vehicle is on its circle at a given moment is not predictable, so for its links the planner uses bounds: a link counts as at risk when the farthest point
+of the circle is beyond D - margin_m and as dropped when the nearest point is beyond D + margin_m. The circle's centre is taken to move between the two circles in a straight line at
+`plane_speed_mps`. The plane is the agent that gets cut off: `excursion_agent` must not be set with it. It does not land (see mesh_control/mesh_plane.py).
+
 Modelling notes: the margin has to cover the tracking error (about speed x tracking_lag_s while moving). Ground is assumed flat for the altitude arithmetic, as elsewhere.
 Waypoints are ENU world metres.
 """
@@ -58,6 +65,12 @@ DEFAULTS = {
     "altitude_step_m": 3.0,
     "speed_mps": 3.0,             # multirotors
     "rover_speed_mps": 1.0,       # roam: ground vehicles (a rover agent has agents[].vehicle: r1_rover); PX4's own limit for the R1 airframe is RO_SPEED_LIM 2 m/s
+    "plane_altitude_m": 50.0,     # roam: a fixed-wing agent circles this high above its arming point (Baylands: the highest mesh vertex within 350 m of the spawn area is about 34 m)
+    "plane_speed_mps": 16.0,      # roam: ground speed used for the transit between the two circles (16.7 m/s measured for the RC Cessna in one flight, 2026-11-10)
+    "plane_near_offset_m": [0.0, 0.0],   # roam: the near circle's centre, ENU metres from the centre of the other agents' spawn points
+    "plane_far_heading_deg": 50.0,       # roam: direction of the far circle's centre from the near one (ENU degrees: 0 = east, 90 = north)
+    "plane_out_after_s": 10.0,    # roam: the plane leaves the near circle this long after the shared start signal
+    "plane_far_dwell_s": 30.0,    # roam: time between the plane's (planned) arrival at the far circle and its departure; at least min_isolation_s + 4 s is used
     "rover_arena_radius_m": 6.0,  # roam: a rover's waypoints are drawn within this radius of ITS OWN spawn point (it drives on the ground, so the arena is small and local)
     "random_waypoints": 3,
     "roam_radius_m": 20.0,
@@ -95,6 +108,14 @@ def settings(cfg):
     else:
         if int(s["max_dropped_links"]) < 1 or int(s["min_drop_events"]) < 1:
             raise ValueError("max_dropped_links and min_drop_events must be at least 1")
+    for k in ("plane_altitude_m", "plane_speed_mps", "plane_out_after_s", "plane_far_dwell_s"):
+        if not (isinstance(s[k], (int, float)) and not isinstance(s[k], bool) and s[k] > 0):
+            raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
+    if not (isinstance(s["plane_near_offset_m"], (list, tuple)) and len(s["plane_near_offset_m"]) == 2) or not isinstance(s["plane_far_heading_deg"], (int, float)):
+        raise ValueError("scenario.mesh_dropout.plane_near_offset_m must be [east, north] metres and plane_far_heading_deg a number")
+    planes = [a["name"] for a in cfg["agents"] if vehicles.kind(a) == "fixedwing"]
+    if planes and (s["mode"] != "roam" or len(planes) > 1 or len(names) < 2 or s["excursion_agent"] is not None):
+        raise ValueError(f"a fixed-wing agent ({planes}) needs mode roam, at most one fixed-wing, at least one other agent, and no excursion_agent (the plane is the agent that leaves)")
     for k in ("speed_mps", "roam_radius_m", "dwell_s", "margin_m", "heartbeat_hz", "link_timeout_s", "arena_radius_m", "min_drop_s", "min_flight_s", "tracking_lag_s", "rover_speed_mps", "rover_arena_radius_m"):
         if not (isinstance(s[k], (int, float)) and s[k] > 0):
             raise ValueError(f"scenario.mesh_dropout.{k} must be a positive number, got {s[k]!r}")
@@ -218,7 +239,12 @@ def _plan_roam(cfg, s):
     margin, speed, lag = float(s["margin_m"]), float(s["speed_mps"]), float(s["tracking_lag_s"])
     spd = {n: float(s["rover_speed_mps"]) if kinds[n] == "rover" else speed for n in names}
     rng = random.Random(int(s["seed"]))
-    centre = (sum(spawn[n][0] for n in names) / len(names), sum(spawn[n][1] for n in names) / len(names))
+    plane = next((n for n in names if kinds[n] == "fixedwing"), None)
+    ground = [n for n in names if n != plane]            # every agent that follows a waypoint path (multirotors and rovers); the arena is centred on their spawn points
+    centre = (sum(spawn[n][0] for n in ground) / len(ground), sum(spawn[n][1] for n in ground) / len(ground))
+    if plane:
+        alt[plane] = float(s["plane_altitude_m"])
+        spd[plane] = float(s["plane_speed_mps"])
     inner, outer = float(s["roam_radius_m"]) + 3.0, float(s["arena_radius_m"])
     arcs = s["heading_sectors_deg"]
 
@@ -313,6 +339,48 @@ def _plan_roam(cfg, s):
         f = (t - times[i]) / (times[i + 1] - times[i])
         return (pts[i][0] + f * (pts[i + 1][0] - pts[i][0]), pts[i][1] + f * (pts[i + 1][1] - pts[i][1]))
 
+    # ---- fixed-wing agent: two circles and a straight transit of the circle's centre between them (see the module docstring)
+    pl = None
+    if plane:
+        R = float(vehicles.VEHICLES[vehicles.name(next(a for a in agents if a["name"] == plane))]["loiter_radius_m"])
+        near = (centre[0] + float(s["plane_near_offset_m"][0]), centre[1] + float(s["plane_near_offset_m"][1]))
+        # how far from the near circle's centre another agent can be: its own area (a rover's disc around its spawn point, the shared arena for a multirotor)
+        reach = max((math.dist(spawn[n][:2], near) + float(s["rover_arena_radius_m"])) if kinds[n] == "rover" else (math.dist(centre, near) + outer) for n in ground)
+        worst = math.hypot(reach + R, alt[plane])        # farthest the plane on its near circle can be from another agent (that agent on the ground, at the edge of its area)
+        if worst >= D - margin:
+            raise ValueError(f"the fixed-wing agent's near circle (radius {R:g} m, {alt[plane]:g} m up) can be {worst:.0f} m from another agent, beyond D - margin = {D - margin:.0f} m: "
+                             "raise network.wifi.tx_power_dbm, or lower plane_altitude_m")
+        far_dist = D + margin + R + reach + float(s["excursion_extra_m"])     # horizontal; the altitude difference only adds distance
+        th = math.radians(float(s["plane_far_heading_deg"]))
+        far = (near[0] + far_dist * math.cos(th), near[1] + far_dist * math.sin(th))
+        transit = far_dist / spd[plane]
+        t_out = float(s["plane_out_after_s"])
+        t_back = t_out + transit + max(float(s["plane_far_dwell_s"]), float(s["min_isolation_s"]) + 4.0)
+        pl = {"radius_m": R, "near_enu": [round(near[0], 2), round(near[1], 2)], "far_enu": [round(far[0], 2), round(far[1], 2)], "far_distance_m": round(far_dist, 1),
+              "t_out_s": round(t_out, 2), "t_back_s": round(t_back, 2),
+              "t_end_s": round(t_back + transit + 2 * math.pi * R / spd[plane], 2)}      # back at the near circle, plus one lap for joining it
+
+        def plane_centre(t):
+            if t <= t_out:
+                return near
+            if t < t_out + transit:
+                f = (t - t_out) / transit
+            elif t <= t_back:
+                return far
+            else:
+                f = max(0.0, 1.0 - (t - t_back) / transit)
+            return (near[0] + f * (far[0] - near[0]), near[1] + f * (far[1] - near[1]))
+
+    def bounds(a, b, xy, t):
+        """(nearest, farthest) possible 3-D distance between a and b at time t. Equal for two waypoint-following agents; for the fixed-wing agent, the nearest and farthest point of its circle."""
+        za, zb = spawn[a][2] + alt[a], spawn[b][2] + alt[b]
+        if plane not in (a, b):
+            d = math.dist((xy[a][0], xy[a][1], za), (xy[b][0], xy[b][1], zb))
+            return d, d
+        o = b if a == plane else a
+        h = math.dist(plane_centre(t - lag), xy[o])
+        return math.hypot(max(h - pl["radius_m"], 0.0), za - zb), math.hypot(h + pl["radius_m"], za - zb)
+
     def evaluate(paths, t_total, dt=0.25):
         pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
         runs = {p: None for p in pairs}
@@ -320,17 +388,17 @@ def _plan_roam(cfg, s):
         iso_run, isolations = {n: None for n in names}, []
         t = 0.0
         while t <= t_total + 1e-9:
-            xy = {n: at(paths[n], t - lag) for n in names}
+            xy = {n: at(paths[n], t - lag) for n in ground}
             risk = 0
             far = {n: True for n in names}                  # n is beyond D + margin from every other agent
             for a, b in pairs:
-                d = math.dist((xy[a][0], xy[a][1], spawn[a][2] + alt[a]), (xy[b][0], xy[b][1], spawn[b][2] + alt[b]))
-                risk += d > D - margin
+                d, d_hi = bounds(a, b, xy, t)             # d: nearest possible distance (decides a drop); d_hi: farthest (decides "at risk")
+                risk += d_hi > D - margin
                 if d <= D + margin:
                     far[a] = far[b] = False
                 if d > D + margin:
                     runs[(a, b)] = (runs[(a, b)] or [t, 0.0])
-                    peak[(a, b)] = max(peak[(a, b)], d)
+                    peak[(a, b)] = max(peak[(a, b)], d_hi)
                 elif runs[(a, b)] is not None:
                     t0 = runs[(a, b)][0]
                     if t - t0 >= s["min_drop_s"]:
@@ -352,8 +420,8 @@ def _plan_roam(cfg, s):
 
     for attempt in range(1, int(s["max_attempts"]) + 1):
         paths = {n: (draw_excursion_path((round(spawn[n][0], 2), round(spawn[n][1], 2))) if n == s["excursion_agent"]
-                     else draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2)), n)) for n in names}
-        t_total = max(p[1][-1] for p in paths.values()) + float(s["end_hold_s"])
+                     else draw_path((round(spawn[n][0], 2), round(spawn[n][1], 2)), n)) for n in ground}
+        t_total = max([p[1][-1] for p in paths.values()] + ([pl["t_end_s"]] if plane else [])) + float(s["end_hold_s"])
         max_risk, events, isolations = evaluate(paths, t_total)
         if (max_risk <= int(s["max_dropped_links"]) and len(events) >= int(s["min_drop_events"])
                 and (s["min_isolation_s"] <= 0 or isolations)):
@@ -364,8 +432,9 @@ def _plan_roam(cfg, s):
     return {"mode": "roam", "seed": int(s["seed"]), "dropout_range_m": D, "margin_m": margin, "settings": s, "altitude_m": alt,
             "kind": kinds, "speed_mps": spd, "spawn": {n: spawn[n] for n in names}, "centre": [centre[0], centre[1]], "attempts": attempt,
             "t_total_s": round(t_total, 2), "max_links_at_risk": max_risk, "nominal_events": events, "nominal_isolations": isolations,
-            "agents": {n: {"waypoints_enu": [list(p) for p in paths[n][0]], "times_s": [round(t, 2) for t in paths[n][1]],
-                           "path_length_m": round(sum(math.dist(u, v) for u, v in zip(paths[n][0], paths[n][0][1:])), 1)} for n in names}}
+            "agents": {**{n: {"waypoints_enu": [list(p) for p in paths[n][0]], "times_s": [round(t, 2) for t in paths[n][1]],
+                              "path_length_m": round(sum(math.dist(u, v) for u, v in zip(paths[n][0], paths[n][0][1:])), 1)} for n in ground},
+                       **({plane: {"kind": "fixedwing", "altitude_m": alt[plane], **pl}} if plane else {})}}
 
 
 def plan(cfg):

@@ -188,6 +188,12 @@ move the camera in the GUI; the dashboard shows only `agent1` and `agent2`.
 `demo/run_container_demo.sh [--config YAML] [--no-gui] [--no-map] [--no-markers] [--no-prompt]` is the same demo on the Docker deployment ([CONTAINERS.md](CONTAINERS.md)), without sudo,
 and adds a live 2D map of every agent pair's signal strength next to the Gazebo GUI. It has the same camera framing; its dashboard is the map window rather than `demo/monitor.py`.
 
+With an Isaac Sim config (experimental), e.g. `COSIM_ACCEPT_ISAAC_EULA=Y demo/run_container_demo.sh --config config/experiments/isaac_four_agent_mesh_dropout.yaml`, the same script opens Isaac Sim's own window instead of the Gazebo GUI:
+it sets `COSIM_ISAAC_GUI=1`, and the simulator container then runs Isaac Sim with a window on the host's X11 display (the X11 socket and a copy of the display's cookie are mounted into the container; its network stays internal).
+The scene is the flat ground box with two lights; the viewport camera is placed south-west of the spawn points and the window is redrawn 20 times per wall-clock second. `--world` and the trail markers do not apply. Needs an X11 session and `xauth`.
+Single run (2026-11-10, same hardware and versions as the four-multirotor run above, `--no-prompt`): the window opened (1440 x 900) and the live map ran; all flight, link and isolation checks passed and the real-time-factor check FAILED
+(worst 5-s window mean 0.465, flight-window mean 0.547, against 0.594 headless in the single run above). A GUI run is a demonstration, not a valid measurement. The rendered picture (lighting, camera framing) was not inspected in that run.
+
 ## Reference results
 
 Single runs on the development machine (16 cores, 31 GB), rootless (or Docker Compose where stated), Cyclone DDS, world `px4_flat`, 10 m square at 5 m altitude and

@@ -83,7 +83,8 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "environment": {**s["environment"], "COSIM_CONFIG": "/config/experiment_run.yaml",
                             "HOME": os.path.expanduser("~")},      # so Gazebo resolves Fuel models to the host's paths (fuel.py)
             "volumes": common_vol + [f"{ROOT}/worlds:/opt/cosim/worlds:ro",
-                                     f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"],   # Fuel models, at the host's own path (fuel.py)
+                                     f"{fuel.cache_dir()}:{fuel.cache_dir()}:ro"]    # Fuel models, at the host's own path (fuel.py)
+                       + s.get("volumes", []),                                       # driver-specific mounts (Isaac Sim GUI: the host's X11 socket)
             "healthcheck": {"test": ["CMD-SHELL", s["healthcheck_cmd"]], "interval": "3s", "timeout": "5s", "retries": s.get("healthcheck_retries", 60)},
             "stop_grace_period": "10s",
         }
@@ -128,7 +129,7 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             "depends_on": deps,
             "environment": agent_env,
             "volumes": common_vol,
-            "healthcheck": {"test": ["CMD-SHELL", ready], "interval": "3s", "timeout": "3s", "retries": 100},
+            "healthcheck": {"test": ["CMD-SHELL", ready], "interval": "3s", "timeout": "3s", "retries": 150},
             "stop_grace_period": "10s",
         }
 

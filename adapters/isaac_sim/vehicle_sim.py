@@ -13,10 +13,14 @@ posts around the origin so the image is not black or constant.
 Pose feed: adapters/isaac_sim/pose_feed.py, a thread in this process sending each vehicle's position plus `antenna_offset` to ns-3 at network.pose.rate_hz.
 Modelling note: Isaac Sim's world frame is taken as East-North-Up with the origin ns-3 uses, as for Gazebo (docs/CONTAINERS.md, pose feed): the vehicles are spawned at `spawn_pose`
 in that frame and Pegasus reports positions in it. Nothing here checks that frame against anything else.
+GUI (COSIM_ISAAC_GUI=1, set by demo/run_container_demo.sh through orchestrator/simulators.py): Isaac Sim opens its window on the host's X11 display instead of running headless. The scene
+gets the two lights and the viewport camera is placed to frame the spawn points; the window is redrawn GUI_FPS times per wall-clock second (not every physics step, which would
+slow the simulation further). For demonstrations only: rendering costs simulation speed, and a GUI run was never checked for run validity.
 """
 import argparse
 import os
 import sys
+import time
 
 import yaml
 
@@ -32,7 +36,9 @@ import camera_stream
 import pose_feed
 
 from isaacsim import SimulationApp
-simulation_app = SimulationApp({"headless": True})          # must follow the import directly (Pegasus examples)
+GUI = os.environ.get("COSIM_ISAAC_GUI") == "1"
+GUI_FPS = 20.0                                               # window redraws per wall-clock second in GUI mode
+simulation_app = SimulationApp({"headless": not GUI})        # must follow the import directly (Pegasus examples)
 
 import omni.timeline
 from omni.isaac.core.world import World
@@ -60,14 +66,21 @@ from isaacsim.core.api.objects import FixedCuboid
 FixedCuboid(prim_path="/World/ground", name="ground", position=[0.0, 0.0, -0.1], scale=[400.0, 400.0, 0.2])
 
 cam_agents = [a for a in cfg["agents"] if a.get("camera")]
-if cam_agents:
-    import numpy as np
+import numpy as np
+if cam_agents or GUI:
     import omni.usd
     from pxr import UsdLux
-    from isaacsim.sensors.camera import Camera
     stage = omni.usd.get_context().get_stage()
     UsdLux.DistantLight.Define(stage, "/World/sun").CreateIntensityAttr(3000.0)
     UsdLux.DomeLight.Define(stage, "/World/sky").CreateIntensityAttr(500.0)
+if GUI:
+    # Viewport camera: south-west of the centre of the spawn points, looking at a point 6 m above it (the mesh-dropout flights are at 8 m and higher). Drag in the window to adjust.
+    from isaacsim.core.utils.viewports import set_camera_view
+    _cx = sum(float(a["spawn_pose"][0]) for a in cfg["agents"]) / len(cfg["agents"])
+    _cy = sum(float(a["spawn_pose"][1]) for a in cfg["agents"]) / len(cfg["agents"])
+    set_camera_view(eye=[_cx - 22.0, _cy - 22.0, 18.0], target=[_cx, _cy, 6.0])
+if cam_agents:
+    from isaacsim.sensors.camera import Camera
     for i, (px, py, col) in enumerate([(6.0, 0.0, (1.0, 0.1, 0.1)), (0.0, 6.0, (0.1, 0.1, 1.0)), (-6.0, 0.0, (0.1, 1.0, 0.1)), (0.0, -6.0, (1.0, 1.0, 0.1))]):
         FixedCuboid(prim_path=f"/World/post{i}", name=f"post{i}", position=[px, py, 1.5], scale=[0.6, 0.6, 3.0], color=np.array(col))
 
@@ -109,12 +122,16 @@ timeline.play()
 print(f"vehicle_sim: {len(cfg['agents'])} vehicle(s) spawned, waiting for PX4", flush=True)
 steps = 0
 sender.start()
-for _ in range(10 if cams else 0):
+for _ in range(10 if (cams or GUI) else 0):
     world.step(render=True)                                   # first renders compile shaders: do it before the vehicle is flying
+next_gui = 0.0
 while simulation_app.is_running():
     t = world.current_time
     due = [n for n, c in cams.items() if t >= c["next"]]
-    world.step(render=bool(due))
+    gui_due = GUI and time.time() >= next_gui                 # the window is redrawn on a wall-clock schedule, so a slow simulation still shows a smooth picture
+    if gui_due:
+        next_gui = time.time() + 1.0 / GUI_FPS
+    world.step(render=bool(due) or gui_due)
     steps += 1
     for name, drone in drones.items():
         sender.update(name, drone.state.position, world.current_time)

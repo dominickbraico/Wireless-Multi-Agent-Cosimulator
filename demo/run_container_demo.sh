@@ -13,6 +13,9 @@
 # Needs: Docker with the images built (python3 orchestrator/cosim.py build), a desktop session, Gazebo Harmonic on the host
 # (for the GUI) and python3 with matplotlib + Tk (for the map). No sudo.
 # Env: SIDE (square side, default 14 m), ALT (default 6 m), SPEED (default 1.5 m/s)   (leader-follower only; the mesh-dropout plan comes from the YAML)
+# Isaac Sim (a YAML with simulator.type isaac, experimental; e.g. config/experiments/isaac_four_agent_mesh_dropout.yaml): instead of the Gazebo GUI, Isaac Sim opens its own window
+# on this X11 display from inside the simulator container (COSIM_ISAAC_GUI, orchestrator/simulators.py). Needs COSIM_ACCEPT_ISAAC_EULA=Y, an X11 session and xauth; --world and the
+# trail markers do not apply. Rendering the window slows the simulation, so such a run is a demonstration, not a valid measurement (docs/EXPERIMENTS.md).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GUI=1; MAP=1; MARKERS=1; SHOWPLAN=""; HALOS=""; PROMPT=1; WORLD=""; CFG="$ROOT/config/experiments/five_agent_wifi.yaml"
@@ -26,6 +29,7 @@ CFG="$(cd "$(dirname "$CFG")" && pwd)/$(basename "$CFG")"
 OUT="$ROOT/logs/container_demo_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$OUT"
 SIDE="${SIDE:-14.0}"; ALT="${ALT:-6.0}"; SPEED="${SPEED:-1.5}"
 SCEN="$(python3 -c "import yaml,sys; print((yaml.safe_load(open(sys.argv[1])).get('scenario') or {}).get('type', 'leader_follower'))" "$CFG")"
+SIMTYPE="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['simulator']['type'])" "$CFG")"
 case "$SCEN" in
   leader_follower) TESTSCRIPT="$ROOT/tests/containers_leader_follower.sh";;
   mesh_dropout)    TESTSCRIPT="$ROOT/tests/containers_mesh_dropout.sh";;
@@ -47,16 +51,27 @@ trap 'exit 130' INT TERM
 trap on_exit EXIT
 
 say "Preflight"
-docker image inspect cosim-agent cosim-ns3 cosim-sim-gazebo >/dev/null 2>&1 || { echo "Images missing. Build them:  python3 $ROOT/orchestrator/cosim.py build"; exit 1; }
+docker image inspect cosim-agent cosim-ns3 "cosim-sim-$SIMTYPE" >/dev/null 2>&1 || { echo "Images missing. Build them:  python3 $ROOT/orchestrator/cosim.py build --config $CFG"; exit 1; }
 [ -n "${DISPLAY:-}" ] || { echo "No DISPLAY: the GUI and the map need a desktop session (use --no-gui --no-map for a headless run)."; GUI=0; MAP=0; }
-if [ $GUI = 1 ]; then
+if [ "$SIMTYPE" = isaac ]; then
+  [ "${COSIM_ACCEPT_ISAAC_EULA:-}" = Y ] || { echo "Isaac Sim needs you to accept NVIDIA's licence: set COSIM_ACCEPT_ISAAC_EULA=Y (docs/CONTAINERS.md, \"Isaac Sim\")."; exit 1; }
+  if [ $GUI = 1 ]; then
+    # Isaac Sim's window comes from the simulator container over the X11 socket. Its hostname differs from the host's, so it gets a copy of this display's cookie
+    # with the wildcard family (ffff) instead of opening the X server with xhost.
+    command -v xauth >/dev/null || { echo "The Isaac Sim window needs xauth (sudo apt install xauth). Use --no-gui to run headless."; exit 1; }
+    : > "$OUT/isaac.xauth"
+    xauth nlist "$DISPLAY" | sed -e 's/^..../ffff/' | xauth -f "$OUT/isaac.xauth" nmerge - 2>/dev/null
+    [ -s "$OUT/isaac.xauth" ] || { echo "Could not copy the X11 cookie of display $DISPLAY (is this an X11 session?). Use --no-gui to run headless."; exit 1; }
+    export COSIM_ISAAC_GUI=1 COSIM_ISAAC_XAUTH="$OUT/isaac.xauth"
+  fi
+elif [ $GUI = 1 ]; then
   [ -x /usr/bin/gz ] || { echo "The Gazebo GUI needs Gazebo Harmonic on the host (/usr/bin/gz). Use --no-gui, or install it (docs/SETUP.md)."; exit 1; }
   [ -d "$HOME/.simulation-gazebo/models/x500" ] || { echo "PX4's Gazebo models are missing on the host: run px4/fetch_gazebo_models.sh"; exit 1; }
 fi
 if [ $MAP = 1 ]; then python3 -c "import matplotlib, tkinter" 2>/dev/null || { echo "The live map needs matplotlib and Tk (sudo apt install python3-tk). Use --no-map to skip."; exit 1; }; fi
 # host-side address on the management network: the Docker bridge's gateway (see orchestrator/containers.py)
 GWIP="$(python3 "$ROOT/orchestrator/containers.py" "$CFG" | python3 -c "import json,sys; print(json.load(sys.stdin)['mgmt']['gateway'])")"
-GZPART="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['simulator']['gz_partition'])" "$CFG")"
+GZPART="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['simulator'].get('gz_partition', ''))" "$CFG")"     # empty for Isaac Sim
 echo "logs: $OUT   (host reaches the simulator from $GWIP, gz partition $GZPART)"
 
 say "Starting the containers: simulator, ns-3 and one per agent (about 1 to 3 min)"
@@ -75,7 +90,9 @@ if [ $MAP = 1 ]; then
   MAPPID=$!; echo "live map window opened"
 fi
 
-if [ $GUI = 1 ]; then
+if [ $GUI = 1 ] && [ "$SIMTYPE" = isaac ]; then
+  echo "The Isaac Sim window was opened by the simulator container (drag in it to move the camera)."
+elif [ $GUI = 1 ]; then
   say "Opening the Gazebo GUI (on the host, attached to the simulator container)"
   # clean environment so ROS 2's gz stub / libraries cannot interfere
   GZENV=(env -i HOME="$HOME" DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
@@ -107,7 +124,7 @@ if [ $GUI = 1 ]; then
 fi
 
 if [ $PROMPT = 1 ]; then
-  say "Ready. Arrange the Gazebo and map windows side by side (start your screen recorder), then press Enter to fly."
+  say "Ready. Arrange the simulator and map windows side by side (start your screen recorder), then press Enter to fly."
   read -r _
 else
   say "Starting the flight in 5 s"; sleep 5
