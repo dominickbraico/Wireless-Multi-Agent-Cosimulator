@@ -6,6 +6,7 @@ python3 /opt/cosim/orchestrator/container_net.py agent --config "$CFG" --name "$
 set +u
 source /opt/ros/jazzy/setup.bash
 source /opt/cosim_ws/install/setup.bash
+[ -f /opt/user_ws/install/setup.bash ] && source /opt/user_ws/install/setup.bash    # custom scenario: the user's workspace (docker/agent-custom.Dockerfile)
 set -u
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp PYTHONPATH="/opt/cosim/orchestrator:${PYTHONPATH:-}"
 exec python3 /opt/cosim/orchestrator/agent_main.py

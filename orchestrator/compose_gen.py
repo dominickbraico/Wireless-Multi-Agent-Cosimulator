@@ -22,6 +22,7 @@ import os
 import yaml
 
 import containers
+import custom_config
 import fuel
 import simulators
 import technologies
@@ -108,6 +109,15 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
         "stop_grace_period": "20s",       # ns-3 writes summary.json on SIGTERM
     }
 
+    # Agent image: the stock one, or for `scenario.type: custom` an overlay that adds the user's workspace
+    # (docker/agent-custom.Dockerfile; its build context is that workspace, so nothing else of the host is sent to Docker).
+    agent_image, agent_build = f"{AGENT_IMAGE}:latest", {"context": ROOT, "dockerfile": "docker/agent.Dockerfile"}
+    if (cfg.get("scenario") or {}).get("type") == "custom":
+        custom = custom_config.load(cfg)                  # also validates the section before anything starts
+        agent_image = f"{custom_config.image_tag(cfg)}:latest"
+        agent_build = {"context": custom["workspace"], "dockerfile": os.path.join(ROOT, "docker", "agent-custom.Dockerfile"),
+                       "args": {"AGENT_IMAGE": f"{AGENT_IMAGE}:latest"}}
+
     deps = {"ns3": {"condition": "service_healthy"}}
     if mode == "flight":
         deps["simulator"] = {"condition": "service_healthy"}
@@ -120,8 +130,8 @@ def generate(cfg, out, mode="flight", firewall=None, world=None, env=None):
             if env.get(k):
                 agent_env[k] = env[k]
         services[n] = {
-            "image": f"{AGENT_IMAGE}:latest",
-            "build": {"context": ROOT, "dockerfile": "docker/agent.Dockerfile"},
+            "image": agent_image,
+            "build": agent_build,
             "hostname": n,
             "networks": {mgmt_net: {"ipv4_address": p["mgmt_ip"]}, p["link_net"]: {"ipv4_address": p["agent_link_ip"]}},
             "cap_add": ["NET_ADMIN"],

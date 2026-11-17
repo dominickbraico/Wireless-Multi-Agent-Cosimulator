@@ -115,8 +115,11 @@ def main():
     if scenario == "rover_drive":                        # ground vehicles: PX4 stack above is shared, the drive is its own node
         import scenario_rover
         return scenario_rover.run(cfg, agent, name, inst, LOGS)
+    if scenario == "custom":                             # the user's own ROS 2 launch file plus the radio relay (docs/CUSTOM_CONTROLLERS.md)
+        import scenario_custom
+        return scenario_custom.run(cfg, agent, name, inst, LOGS, DDS)
     if scenario != "leader_follower":
-        print(f"agent_main[{name}]: unknown scenario.type '{scenario}' (leader_follower, mesh_dropout, rover_drive)", flush=True)
+        print(f"agent_main[{name}]: unknown scenario.type '{scenario}' (leader_follower, mesh_dropout, rover_drive, custom)", flush=True)
         supervise.stop_all()
 
     # swarm node: the only process on the radio domain

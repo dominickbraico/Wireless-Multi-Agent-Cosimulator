@@ -1,0 +1,76 @@
+# Single source of truth for an experiment. Read by the ns-3 scenario, the
+# orchestrator and (later) the pose bridge. A copy is saved in every run's log dir.
+experiment:
+  name: custom_consensus
+  duration_s: 120                # the user's launch is stopped this long after the go signal if it has not exited
+  log_dir: logs/${name}_${timestamp}
+time:
+  ns3_sync_mode: BestEffort        # BestEffort | HardLimit
+  ns3_hard_limit_s: 0.1
+  max_lag_ms: 10                   # run flagged invalid above this
+  min_rtf: 0.95
+  rtf_window_s: 5.0                # sliding-mean window for the RTF validity check
+network:
+  backend: ns3                     # network emulator engine (only ns3 exists; a 'netem' stress backend would be another)
+  technology: wifi                 # radio technology = which ns-3 scenario runs; see docs/CONTAINERS.md 'Changing the networking technology'
+  wifi:
+    standard: 80211a
+    mac: adhoc
+    rate_manager: ConstantRate
+    data_mode: OfdmRate12Mbps
+    control_mode: OfdmRate6Mbps
+    tx_power_dbm: 16.0             # default radio: the signal reaches the receiver floor at about 51 m, so every agent hears every other
+    error_rate_model: TableBased   # TableBased (ns-3 default for Yans) | Nist
+    retry_limit: null              # null = ns-3 default (7 attempts)
+    phy:                           # receiver parameters; defaults are ns-3's, all hardware-measurable
+      rx_noise_figure_db: 7.0
+      preamble_detection_min_rssi_dbm: -82.0   # frames weaker than this are never detected (hard cutoff)
+      preamble_detection_snr_db: 4.0           # ... or with SNR below this
+      cca_ed_threshold_dbm: -62.0
+      rx_sensitivity_dbm: -101.0
+  channel:
+    loss:
+      - {type: LogDistance, exponent: 3.0, ref_distance_m: 1.0, ref_loss_db: 46.6777}
+    delay: ConstantSpeed
+  pose:
+    transport: udp
+    listen_addr: 127.0.0.1         # where the ns-3 pose listener binds (mgmt network in Docker)
+    port: 5600
+    rate_hz: 50
+  radio_subnet: 10.10.0.0/24
+  radio_firewall:                  # default-deny on radio0 inside each agent; absent = no firewall (link tests)
+    enabled: false                 # the PX4 flight tests turn this on
+    allow_udp_ports: [17900, 18149]   # RTPS ports of DDS domain 42 (7400 + 250*42 .. +249)
+  mgmt:                            # unemulated management network: simulator <-> agents, never agent <-> agent
+    bridge: br-mgmt
+    subnet: 10.20.0.0/24
+    bridge_ip: 10.20.0.1           # simulator side (Gazebo, pose bridge, ns-3) lives here
+# Template for a custom controller (docs/CUSTOM_CONTROLLERS.md): four x500 on the flat world, 10 m triangle plus its centroid.
+# Each agent starts at its own altitude (launch_args.start_altitude) and the template controller brings them to a common one.
+agents:
+  - {name: agent1, radio_ip: 10.10.0.1, mgmt_ip: 10.20.0.11, px4_instance: 0, px4_gz_model: x500_0, spawn_pose: [-5.0, 0.0, 0.3, 0], tap: tap-a1, bridge: br-a1, antenna_offset: [0, 0, 0.1], launch_args: {start_altitude: 4.0}}
+  - {name: agent2, radio_ip: 10.10.0.2, mgmt_ip: 10.20.0.12, px4_instance: 1, px4_gz_model: x500_1, spawn_pose: [5.0, 0.0, 0.3, 0], tap: tap-a2, bridge: br-a2, antenna_offset: [0, 0, 0.1], launch_args: {start_altitude: 5.5}}
+  - {name: agent3, radio_ip: 10.10.0.3, mgmt_ip: 10.20.0.13, px4_instance: 2, px4_gz_model: x500_2, spawn_pose: [0.0, 8.66, 0.3, 0], tap: tap-a3, bridge: br-a3, antenna_offset: [0, 0, 0.1], launch_args: {start_altitude: 7.0}}
+  - {name: agent4, radio_ip: 10.10.0.4, mgmt_ip: 10.20.0.14, px4_instance: 3, px4_gz_model: x500_3, spawn_pose: [0.0, 2.89, 0.3, 0], tap: tap-a4, bridge: br-a4, antenna_offset: [0, 0, 0.1], launch_args: {start_altitude: 8.5}}
+# Scenario: the agents run a user's own ROS 2 packages instead of a built-in flight.
+scenario:
+  type: custom
+  custom:
+    workspace: examples/template_ws      # colcon workspace built into the agent image by `cosim.py build --config <this file>`
+    launch:                              # started once in every agent, on the local DDS domain, when the run begins
+      package: consensus_controller
+      file: agent.launch.py
+      args: {gain: 0.3, run_s: 40.0, rate_hz: 5.0}     # extra launch arguments, the same for every agent
+    radio_topics:                        # the only topics that cross the emulated radio; everything else stays inside the agent
+      - name: /swarm/state
+        type: consensus_msgs/msg/AgentState
+        reliability: best_effort         # best_effort | reliable; must equal the QoS the nodes use
+        durability: volatile             # volatile | transient_local
+        depth: 10                        # keep-last depth
+simulator:
+  type: gazebo
+  world: worlds/two_agent_flat.sdf
+  world_name: two_agent_flat       # must equal the <world name> and the .sdf filename
+  pose_topic: pose/info            # under /world/<world_name>/
+  gz_partition: cosim
+  px4_world_name: px4_flat    # world used by the PX4 stack (worlds/px4_flat.sdf)
